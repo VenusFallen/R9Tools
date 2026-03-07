@@ -49,7 +49,11 @@ class Overlay:
         self._root.attributes("-topmost", True)
         self._root.attributes("-alpha", 0.92)
         self._root.resizable(False, False)
+        self._root.overrideredirect(True)
         self._root.configure(bg="#1e1e1e")
+
+        self._root.bind("<ButtonPress-1>", self._dragStart)
+        self._root.bind("<B1-Motion>", self._dragMove)
 
         s = self._settings["recoil"]
 
@@ -300,6 +304,19 @@ class Overlay:
         else:
             self._statusVar.set(self._statusText())
         self._root.after(100, self._pollStatus)
+
+    # ------------------------------------------------------------------
+    # Drag to move (borderless window)
+    # ------------------------------------------------------------------
+
+    def _dragStart(self, event):
+        self._dragX = event.x
+        self._dragY = event.y
+
+    def _dragMove(self, event):
+        x = self._root.winfo_x() + event.x - self._dragX
+        y = self._root.winfo_y() + event.y - self._dragY
+        self._root.geometry(f"+{x}+{y}")
 
     # ------------------------------------------------------------------
     # Run
