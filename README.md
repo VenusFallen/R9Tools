@@ -1,6 +1,6 @@
 # R9Tools
 
-A personal gaming accessibility toolkit for Windows. Built with hardware-level input via the [Interception](https://github.com/oblitum/Interception) driver to operate independently of anti-cheat software.
+A personal gaming accessibility toolkit for Windows. Built with hardware-level input via the [Interception](https://github.com/oblitum/Interception) driver.
 
 ## Current Modules
 
