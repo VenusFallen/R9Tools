@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime user config (created automatically from defaults on first run)
+settings.json
+
+# PyInstaller
+build/
+dist/
+*.spec
