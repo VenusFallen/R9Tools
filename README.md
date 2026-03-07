@@ -28,28 +28,3 @@ pip install interception-python
 ```bash
 python main.py
 ```
-
-## Usage
-
-| Control | Action |
-|---|---|
-| Checkbox | Enable / disable recoil compensation |
-| F10 | Toggle on/off via hotkey (rebindable) |
-| Trigger button | Set the key/button combo that activates recoil while held |
-| Toggle button | Rebind the on/off hotkey |
-| Pull Strength | Pixels of downward pull per interval tick |
-| Interval (ms) | How frequently the pull is applied |
-| ✕ | Close the overlay |
-
-Settings are saved automatically to `settings.json`.
-
-## Project Structure
-
-```
-R9Tools/
-├── main.py          # Entry point
-├── recoil.py        # Recoil engine + input listener
-├── overlay.py       # Tkinter overlay UI
-├── settings.py      # Config load/save
-└── tests/           # API validation and driver tests
-```
