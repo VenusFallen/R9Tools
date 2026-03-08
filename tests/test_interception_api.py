@@ -14,7 +14,7 @@ INFO = "[INFO]"
 # Test: receive a MouseStroke and dump all its attributes
 # ---------------------------------------------------------------------------
 print("\n=== Receive a MouseStroke and inspect attributes ===")
-print("     >>> pt Exception:
+print("     >>> pt Exception:)
                 print(f"       .{attr}() [no sig]")
         else:
             print(f"       .{attr} = {val!r}")
