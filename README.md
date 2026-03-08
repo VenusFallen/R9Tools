@@ -5,7 +5,10 @@ A personal gaming accessibility toolkit for Windows. Built with hardware-level i
 ## Current Modules
 
 ### Recoil Compensation
-Applies a configurable downward mouse pull while a trigger key combo is held, compensating for weapon recoil. Features an always-on-top overlay UI with live status, adjustable strength, and rebindable keys.
+Applies a configurable downward mouse pull while a trigger key combo is held, compensating for weapon recoil. Adjustable strength and interval, with rebindable trigger and toggle keys.
+
+### Profiles
+Save, load, and delete named configurations. A protected **Default** profile is always available. Loading a profile always starts with recoil disabled for safety. The top bar flashes to confirm saves (green), loads (blue), and deletes (red).
 
 ## Usage
 
