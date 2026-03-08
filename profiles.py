@@ -9,10 +9,24 @@ _DEFAULT_SETTINGS = {
     "recoil": {
         "enabled": False,
         "trigger_keys": ["mouse_left"],
-        "toggle_key": 68,
         "strength_y": 5,
         "interval_ms": 10,
-    }
+    },
+    "crosshair": {
+        "enabled": False,
+        "style": "cross",
+        "color": "green",
+        "size": 10,
+        "thickness": 2,
+        "gap": 3,
+        "outline_size": 1,
+    },
+    "hotkeys": {
+        "overlay_toggle":      {"code": 82, "e0": True},
+        "recoil_toggle":       {"code": 68, "e0": False},
+        "recoil_strength_down": {"code": 26, "e0": False},
+        "recoil_strength_up":   {"code": 27, "e0": False},
+    },
 }
 
 _EMPTY = {
@@ -40,6 +54,20 @@ def load() -> dict:
     if data.get("active") not in data["profiles"]:
         data["active"] = DEFAULT_NAME
 
+    for profile in data["profiles"].values():
+        # Migrate crosshair defaults
+        profile.setdefault("crosshair", copy.deepcopy(_DEFAULT_SETTINGS["crosshair"]))
+        for key, val in _DEFAULT_SETTINGS["crosshair"].items():
+            profile["crosshair"].setdefault(key, val)
+
+        # Migrate hotkeys: promote old recoil.toggle_key int → hotkeys.recoil_toggle dict
+        old_toggle = profile.get("recoil", {}).pop("toggle_key", None)
+        profile.setdefault("hotkeys", copy.deepcopy(_DEFAULT_SETTINGS["hotkeys"]))
+        if old_toggle is not None:
+            profile["hotkeys"]["recoil_toggle"] = {"code": old_toggle, "e0": False}
+        for key, val in _DEFAULT_SETTINGS["hotkeys"].items():
+            profile["hotkeys"].setdefault(key, copy.deepcopy(val))
+
     return data
 
 
@@ -61,6 +89,7 @@ def loadProfile(data: dict, name: str) -> dict | None:
     data["active"] = name
     settings = copy.deepcopy(data["profiles"][name])
     settings["recoil"]["enabled"] = False
+    settings["crosshair"]["enabled"] = False
     save(data)
     return settings
 
