@@ -23,19 +23,22 @@ The overlay requires your game to run in **Borderless Windowed** mode. Exclusive
 - Windows 10/11
 - Python 3.10+
 - [Interception driver](https://github.com/oblitum/Interception) installed (run once, requires reboot)
-- `interception-python` library
-
-```bash
-pip install interception-python
-```
+- `interception-python` Python library
 
 ## Setup
 
 1. Install the Interception driver and reboot
 2. Clone the repo
-3. Install dependencies
-4. Run as **administrator**:
+3. Install the Python dependency:
+
+```bash
+pip install interception-python
+```
+
+1. Run as **administrator**:
 
 ```bash
 python main.py
 ```
+
+> `profiles.json` is created automatically on first run.
