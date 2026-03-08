@@ -2,14 +2,15 @@ import tkinter as tk
 from tkinter import ttk
 import threading
 import interception
+import profiles as prof
 from recoil import scancodeLabel
 
 # ---------------------------------------------------------------------------
 # Layout constants
 # ---------------------------------------------------------------------------
-TOPBAR_H = 30
+TOPBAR_H    = 30
 PANEL_OFFSET = 5
-PANEL_Y = TOPBAR_H + PANEL_OFFSET  # 35
+PANEL_Y      = TOPBAR_H + PANEL_OFFSET  # 35
 
 # ---------------------------------------------------------------------------
 # Colors
@@ -23,6 +24,12 @@ LABEL_FG  = "#cccccc"
 ACCENT    = "#ffffff"
 DIM       = "#888888"
 ACTIVE_FG = "#ffff88"
+BORDER_CLR = "#6B8E23"  # olive drab topbar border (restored after flash)
+
+FLASH_SAVE   = "#44ff88"
+FLASH_LOAD   = "#4488ff"
+FLASH_DELETE = "#ff4444"
+FLASH_MS     = 400
 
 # ---------------------------------------------------------------------------
 # Input constants
@@ -159,7 +166,6 @@ class RecoilPanel:
                   bg=BTN_BG, fg=BTN_FG, relief="flat",
                   font=("Segoe UI", 9), width=2, cursor="hand2").pack(side="left", padx=(0, 1))
 
-        # Entry styled as a label; click to edit
         entry = tk.Entry(row, textvariable=var, width=4,
                          font=("Segoe UI", 9), justify="center",
                          bg="#333333", fg=BTN_FG, relief="flat",
@@ -196,7 +202,7 @@ class RecoilPanel:
         onChange()
 
     # ------------------------------------------------------------------
-    # Show / hide
+    # Show / hide / reload
     # ------------------------------------------------------------------
 
     def show(self):
@@ -204,6 +210,16 @@ class RecoilPanel:
 
     def hide(self):
         self._border.place_forget()
+
+    def reload(self, settings: dict):
+        """Refresh all UI vars from a newly loaded profile (enabled always False)."""
+        s = settings["recoil"]
+        self._settings["recoil"].update(s)
+        self._enabledVar.set(False)
+        self._syVar.set(s["strength_y"])
+        self._intervalVar.set(s["interval_ms"])
+        self._keybindVar.set(comboLabel(s["trigger_keys"]))
+        self._toggleKeyVar.set(scancodeLabel(s.get("toggle_key", 68)))
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -354,12 +370,122 @@ class RecoilPanel:
 
 
 # ===========================================================================
+# ProfilesPanel
+# ===========================================================================
+
+class ProfilesPanel:
+    def __init__(self, root: tk.Tk, profileData: dict,
+                 onLoad, onSave, onDelete):
+        self._root = root
+        self._profileData = profileData
+        self._onLoad = onLoad
+        self._onSave = onSave
+        self._onDelete = onDelete
+        self._build()
+
+    def _build(self):
+        # 1px violet border via wrapper frame
+        self._border = tk.Frame(self._root, bg="#EE82EE")
+        self._frame = tk.Frame(self._border, bg=PANEL_BG)
+        self._frame.pack(padx=1, pady=1)
+
+        # Title
+        tk.Label(self._frame, text="Profiles",
+                 fg=ACCENT, bg=PANEL_BG,
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
+
+        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
+
+        # Active profile label
+        tk.Label(self._frame, text="Active Profile:", fg=LABEL_FG, bg=PANEL_BG,
+                 font=("Segoe UI", 9)).pack(anchor="w", padx=10)
+
+        # Combobox
+        self._combo = ttk.Combobox(self._frame, state="readonly",
+                                    font=("Segoe UI", 9), width=22)
+        self._combo.pack(padx=10, pady=(2, 8), anchor="w")
+        self._refreshCombo()
+        self._combo.bind("<<ComboboxSelected>>", self._onSelect)
+
+        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
+
+        # Name field label
+        tk.Label(self._frame, text="Profile Name:", fg=LABEL_FG, bg=PANEL_BG,
+                 font=("Segoe UI", 9)).pack(anchor="w", padx=10, pady=(4, 2))
+
+        # Name entry + Save + Delete
+        actionRow = tk.Frame(self._frame, bg=PANEL_BG)
+        actionRow.pack(fill="x", padx=10, pady=(0, 10))
+
+        self._nameVar = tk.StringVar()
+        tk.Entry(actionRow, textvariable=self._nameVar,
+                 font=("Segoe UI", 9), bg="#333333", fg=BTN_FG,
+                 relief="flat", insertbackground=BTN_FG,
+                 width=14).pack(side="left", padx=(0, 4))
+
+        tk.Button(actionRow, text="Save",
+                  command=self._onSaveClick,
+                  bg=BTN_BG, fg=BTN_FG, relief="flat",
+                  font=("Segoe UI", 9), padx=6,
+                  cursor="hand2").pack(side="left", padx=(0, 2))
+
+        tk.Button(actionRow, text="Delete",
+                  command=self._onDeleteClick,
+                  bg=BTN_BG, fg="#ff6666", relief="flat",
+                  font=("Segoe UI", 9), padx=6,
+                  cursor="hand2").pack(side="left")
+
+    # ------------------------------------------------------------------
+    # Combo management
+    # ------------------------------------------------------------------
+
+    def refreshCombo(self):
+        names = prof.profileNames(self._profileData)
+        self._combo["values"] = names
+        active = self._profileData["active"]
+        self._combo.set(active if active in names else names[0])
+
+    # internal alias used during build before the public name is needed
+    _refreshCombo = refreshCombo
+
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
+
+    def _onSelect(self, _=None):
+        name = self._combo.get()
+        if name:
+            self._onLoad(name)
+
+    def _onSaveClick(self):
+        name = self._nameVar.get().strip()
+        if name:
+            self._onSave(name)
+
+    def _onDeleteClick(self):
+        name = self._nameVar.get().strip()
+        if name:
+            self._onDelete(name)
+
+    # ------------------------------------------------------------------
+    # Show / hide
+    # ------------------------------------------------------------------
+
+    def show(self):
+        self._border.place(x=0, y=PANEL_Y)
+
+    def hide(self):
+        self._border.place_forget()
+
+
+# ===========================================================================
 # Overlay
 # ===========================================================================
 
 class Overlay:
-    def __init__(self, settings: dict, engine, onSettingsChanged):
+    def __init__(self, settings: dict, profileData: dict, engine, onSettingsChanged):
         self._settings = settings
+        self._profileData = profileData
         self._engine = engine
         self._onSettingsChanged = onSettingsChanged
         self._visible = False
@@ -380,24 +506,20 @@ class Overlay:
         sh = self._root.winfo_screenheight()
         self._root.geometry(f"{sw}x{sh}+0+0")
 
-        # BG_TRANS pixels are invisible and click-through on Windows
         self._root.configure(bg=BG_TRANS)
         self._root.attributes("-transparentcolor", BG_TRANS)
 
         self._buildTopBar()
         self._buildPanels()
-
-        # Start hidden
         self._hideOverlay()
 
     def _buildTopBar(self):
         self._topBar = tk.Frame(self._root, bg=BAR_BG)
-        # 2px olive drab bottom border strip
-        self._topBarBorder = tk.Frame(self._root, bg="#6B8E23")
+        self._topBarBorder = tk.Frame(self._root, bg=BORDER_CLR)
         self._tabButtons: list[tk.Button] = []
 
-        # Module tabs (left side)
         self._addTab("RECOIL", 0)
+        self._addTab("PROFILES", 1)
 
         # QUIT pinned to the right
         tk.Button(self._topBar, text="QUIT",
@@ -407,7 +529,6 @@ class Overlay:
                   activebackground=BTN_BG, activeforeground="#ff6666",
                   cursor="hand2").pack(side="right")
 
-        # Arrow key navigation (only active when overlay is focused)
         self._root.bind("<Left>",  lambda _: self._shiftTab(-1))
         self._root.bind("<Right>", lambda _: self._shiftTab(1))
 
@@ -422,10 +543,15 @@ class Overlay:
         self._tabButtons.append(btn)
 
     def _buildPanels(self):
-        self._panels = [
-            RecoilPanel(self._root, self._settings, self._engine, self._onSettingsChanged),
-        ]
-        # Initialise tab highlight without showing anything yet
+        self._recoilPanel = RecoilPanel(
+            self._root, self._settings, self._engine, self._onSettingsChanged)
+        self._profilesPanel = ProfilesPanel(
+            self._root, self._profileData,
+            onLoad=self._onProfileLoad,
+            onSave=self._onProfileSave,
+            onDelete=self._onProfileDelete)
+
+        self._panels = [self._recoilPanel, self._profilesPanel]
         self._tabButtons[0].config(fg=ACCENT, bg=BTN_BG)
 
     def _selectTab(self, index: int):
@@ -473,6 +599,54 @@ class Overlay:
             self._showOverlay()
 
     # ------------------------------------------------------------------
+    # Topbar border flash
+    # ------------------------------------------------------------------
+
+    def flashBorder(self, color: str):
+        try:
+            self._topBarBorder.config(bg=color)
+            self._root.after(FLASH_MS, lambda: self._topBarBorder.config(bg=BORDER_CLR))
+        except tk.TclError:
+            pass
+
+    # ------------------------------------------------------------------
+    # Profile callbacks
+    # ------------------------------------------------------------------
+
+    def _onProfileLoad(self, name: str):
+        settings = prof.loadProfile(self._profileData, name)
+        if settings is None:
+            return
+        # Update live settings dict in place
+        for key in settings:
+            self._settings[key] = settings[key]
+        self._engine.updateSettings(self._settings)
+        self._recoilPanel.reload(self._settings)
+        self._profilesPanel.refreshCombo()
+        self.flashBorder(FLASH_LOAD)
+
+    def _onProfileSave(self, name: str):
+        success = prof.saveProfile(self._profileData, name, self._settings)
+        if success:
+            self._profilesPanel.refreshCombo()
+            self.flashBorder(FLASH_SAVE)
+
+    def _onProfileDelete(self, name: str):
+        wasActive = (name == self._profileData.get("active"))
+        success = prof.deleteProfile(self._profileData, name)
+        if success:
+            self._profilesPanel.refreshCombo()
+            self.flashBorder(FLASH_DELETE)
+            # If we deleted the active profile, reload Default
+            if wasActive:
+                settings = prof.loadProfile(self._profileData, prof.DEFAULT_NAME)
+                if settings:
+                    for key in settings:
+                        self._settings[key] = settings[key]
+                    self._engine.updateSettings(self._settings)
+                    self._recoilPanel.reload(self._settings)
+
+    # ------------------------------------------------------------------
     # Engine callbacks
     # ------------------------------------------------------------------
 
@@ -483,7 +657,7 @@ class Overlay:
     def _applyEnabled(self, state: bool):
         self._settings["recoil"]["enabled"] = state
         self._onSettingsChanged(self._settings)
-        self._panels[0].refreshEnabled(state)
+        self._recoilPanel.refreshEnabled(state)
 
     # ------------------------------------------------------------------
     # Run

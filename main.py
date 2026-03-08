@@ -2,13 +2,14 @@
 R9Tools - Gaming Accessibility Toolkit
 Run as administrator (required for Interception driver).
 """
-import settings
+import profiles as prof
 from recoil import RecoilEngine
 from overlay import Overlay
 
 
 def main():
-    cfg = settings.load()
+    profileData = prof.load()
+    cfg = prof.activeSettings(profileData)
     cfg["recoil"]["enabled"] = False  # always start disabled
 
     engine = RecoilEngine(cfg)
@@ -16,9 +17,9 @@ def main():
 
     def onSettingsChanged(updated: dict):
         engine.updateSettings(updated)
-        settings.save(updated)
+        # No auto-save — profiles require explicit save via the Profiles panel
 
-    overlay = Overlay(cfg, engine, onSettingsChanged)
+    overlay = Overlay(cfg, profileData, engine, onSettingsChanged)
 
     engine.setToggleCallback(overlay.setEnabled)
     engine.setOverlayCallback(overlay.toggleOverlay)

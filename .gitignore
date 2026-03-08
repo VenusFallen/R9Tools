@@ -11,7 +11,7 @@ venv/
 env/
 
 # Runtime user config (created automatically from defaults on first run)
-settings.json
+profiles.json
 
 # PyInstaller
 build/
