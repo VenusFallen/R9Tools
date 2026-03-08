@@ -21,6 +21,7 @@ def main():
     overlay = Overlay(cfg, engine, onSettingsChanged)
 
     engine.setToggleCallback(overlay.setEnabled)
+    engine.setOverlayCallback(overlay.toggleOverlay)
 
     overlay.run()
 

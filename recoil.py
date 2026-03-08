@@ -42,6 +42,8 @@ class RecoilEngine:
         self._held: set = set()
         self._toggleCallback = None
 
+        self._overlayCallback = None
+
         self._applyThread = threading.Thread(target=self._applyLoop, daemon=True)
         self._listenThread = threading.Thread(target=self._listenLoop, daemon=True)
 
@@ -51,6 +53,9 @@ class RecoilEngine:
 
     def setToggleCallback(self, cb):
         self._toggleCallback = cb
+
+    def setOverlayCallback(self, cb):
+        self._overlayCallback = cb
 
     def start(self):
         self._running = True
@@ -129,10 +134,17 @@ class RecoilEngine:
                     self._held.discard(key)
 
     def _handleKeyboardStroke(self, stroke):
-        isKeyUp = bool(stroke.flags & interception.KeyFlag.KEY_UP)
+        isKeyUp  = bool(stroke.flags & interception.KeyFlag.KEY_UP)
+        isE0     = bool(stroke.flags & interception.KeyFlag.KEY_E0)
 
-        # Toggle fires on key release — compare by scancode int
         if isKeyUp:
+            # INSERT = scancode 82 + E0 extended flag (distinguishes from Numpad 0)
+            if stroke.code == 82 and isE0:
+                if self._overlayCallback:
+                    self._overlayCallback()
+                return
+
+            # Toggle fires on key release — compare by scancode int
             with self._lock:
                 toggleCode = self._settings.get("toggle_key", 68)
             if stroke.code == toggleCode:
