@@ -20,3 +20,16 @@ profiles.json
 build/
 dist/
 *.spec
+build.bat
+
+# Installer build output
+installer/
+
+# Bundled third-party binaries (copy locally, don't commit)
+installer_assets/
+
+# Local assets (icons etc.)
+assets/
+
+# Inno Setup script
+*.iss
