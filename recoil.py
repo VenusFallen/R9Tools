@@ -147,10 +147,20 @@ class RecoilEngine:
 
     def updateSettings(self, settings: dict):
         with self._lock:
+            active_remaps = dict(self._remapActive)
+            # Stop any running strength hold threads before swapping settings
+            for evt in self._strengthHoldEvents.values():
+                evt.set()
+            self._strengthHoldEvents.clear()
             self._fullSettings = settings
             self._settings = settings["recoil"]
             self._held.clear()
             self._remapActive.clear()
+
+        # Release any remapped outputs that were held at settings-change time
+        for to_input in active_remaps.values():
+            if to_input.get("type") in ("key", "mouse"):
+                self._sendSynthesized(to_input, True, None)
 
     @property
     def isActive(self) -> bool:
@@ -169,7 +179,7 @@ class RecoilEngine:
                 sy = self._settings["strength_y"]
                 window_filter = self._fullSettings.get("window_filter", "")
 
-            if enabled and self.isActive and self._windowMatchesFilter(window_filter):
+            if enabled and self.isActive and self.windowMatchesFilter(window_filter):
                 interception.move_relative(0, sy)
 
             time.sleep(0.05)
@@ -324,7 +334,7 @@ class RecoilEngine:
                     if sig[1] == bind.get("code") and sig[2] == bind.get("e0", False):
                         return False
 
-        if not self._windowMatchesFilter(window_filter):
+        if not self.windowMatchesFilter(window_filter):
             return False
 
         to_input = None
@@ -365,7 +375,7 @@ class RecoilEngine:
             return sig[1] == inp.get("direction")
         return False
 
-    def _windowMatchesFilter(self, filter_name: str) -> bool:
+    def windowMatchesFilter(self, filter_name: str) -> bool:
         if not filter_name:
             return True
         if not _WIN32_AVAILABLE:
@@ -375,10 +385,12 @@ class RecoilEngine:
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
             name = psutil.Process(pid).name().lower()
             return name == filter_name.lower()
+        except psutil.NoSuchProcess:
+            return False  # process died — don't activate
         except Exception:
-            return False
+            return True   # transient OS error — allow through
 
-    def _sendSynthesized(self, to: dict, is_up: bool, inter):
+    def _sendSynthesized(self, to: dict, is_up: bool, inter=None):
         t = to.get("type")
         try:
             if t == "key":
@@ -388,7 +400,7 @@ class RecoilEngine:
                 if to.get("e0"):
                     flags |= interception.KeyFlag.KEY_E0
                 stroke = interception.KeyStroke(to["code"], flags)
-                kb = self._kbDevice or inter._devices.get(inter.keyboard)
+                kb = self._kbDevice or (inter._devices.get(inter.keyboard) if inter else None)
                 if kb:
                     kb.send(stroke)
 
@@ -397,7 +409,7 @@ class RecoilEngine:
                 if pair:
                     flag = pair[1] if is_up else pair[0]
                     stroke = interception.MouseStroke(0, flag, 0, 0, 0)
-                    ms = self._msDevice or inter._devices.get(inter.mouse)
+                    ms = self._msDevice or (inter._devices.get(inter.mouse) if inter else None)
                     if ms:
                         ms.send(stroke)
 
@@ -406,7 +418,7 @@ class RecoilEngine:
                 delta = 120 if direction == "up" else -120
                 data  = delta if delta > 0 else (delta & 0xFFFF)
                 stroke = interception.MouseStroke(0, _SCROLL_WHEEL_FLAG, data, 0, 0)
-                ms = self._msDevice or inter._devices.get(inter.mouse)
+                ms = self._msDevice or (inter._devices.get(inter.mouse) if inter else None)
                 if ms:
                     ms.send(stroke)
 

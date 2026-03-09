@@ -10,7 +10,9 @@ from overlay import Overlay
 def main():
     profileData = prof.load()
     cfg = prof.activeSettings(profileData)
-    cfg["recoil"]["enabled"] = False  # always start disabled
+    cfg["recoil"]["enabled"]    = False  # always start disabled
+    cfg["crosshair"]["enabled"] = False
+    cfg["remapper"]["enabled"]  = False
 
     engine = RecoilEngine(cfg)
     engine.start()

@@ -5,6 +5,7 @@ import interception
 
 import theme
 from panels.base import Panel
+from recoil import scancodeLabel
 
 
 class RecoilPanel(Panel):
@@ -139,16 +140,16 @@ class RecoilPanel(Panel):
                             held.discard(key)
 
                 elif isinstance(stroke, interception.KeyStroke):
-                    name = theme._codeToName(stroke.code)
-                    if name:
-                        if not (stroke.flags & interception.KeyFlag.KEY_UP):
-                            held.add(name)
-                            if name not in seen:
-                                seen.append(name)
-                                self._root.after(0, lambda s=list(seen):
-                                    self._keybindVar.set(theme.comboLabel(s) + " ..."))
-                        else:
-                            held.discard(name)
+                    isE0 = bool(stroke.flags & interception.KeyFlag.KEY_E0)
+                    name = scancodeLabel(stroke.code, isE0)
+                    if not (stroke.flags & interception.KeyFlag.KEY_UP):
+                        held.add(name)
+                        if name not in seen:
+                            seen.append(name)
+                            self._root.after(0, lambda s=list(seen):
+                                self._keybindVar.set(theme.comboLabel(s) + " ..."))
+                    else:
+                        held.discard(name)
 
                 if seen and not held:
                     break
