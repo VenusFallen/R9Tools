@@ -13,6 +13,9 @@ env/
 # Runtime user config (created automatically from defaults on first run)
 profiles.json
 
+# Claude Code
+.claude/
+
 # PyInstaller
 build/
 dist/

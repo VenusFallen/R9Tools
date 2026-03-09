@@ -167,8 +167,9 @@ class RecoilEngine:
             with self._lock:
                 enabled = self._settings["enabled"]
                 sy = self._settings["strength_y"]
+                window_filter = self._fullSettings.get("window_filter", "")
 
-            if enabled and self.isActive:
+            if enabled and self.isActive and self._windowMatchesFilter(window_filter):
                 interception.move_relative(0, sy)
 
             time.sleep(0.05)
