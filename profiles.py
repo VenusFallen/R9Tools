@@ -6,6 +6,7 @@ PROFILES_FILE = os.path.join(os.path.dirname(__file__), "profiles.json")
 DEFAULT_NAME = "Default"
 
 _DEFAULT_SETTINGS = {
+    "window_filter": "",
     "recoil": {
         "enabled": False,
         "trigger_keys": ["mouse_left"],
@@ -22,10 +23,15 @@ _DEFAULT_SETTINGS = {
         "outline_size": 1,
     },
     "hotkeys": {
-        "overlay_toggle":      {"code": 82, "e0": True},
-        "recoil_toggle":       {"code": 68, "e0": False},
+        "overlay_toggle":       {"code": 82, "e0": True},
+        "recoil_toggle":        {"code": 68, "e0": False},
         "recoil_strength_down": {"code": 26, "e0": False},
         "recoil_strength_up":   {"code": 27, "e0": False},
+        "quit":                 {"code": 83, "e0": True},
+    },
+    "remapper": {
+        "enabled":  False,
+        "mappings": [],
     },
 }
 
@@ -68,6 +74,15 @@ def load() -> dict:
         for key, val in _DEFAULT_SETTINGS["hotkeys"].items():
             profile["hotkeys"].setdefault(key, copy.deepcopy(val))
 
+        # Migrate top-level window_filter (moved out of remapper)
+        profile.setdefault("window_filter", "")
+        profile.get("remapper", {}).pop("window_filter", None)  # remove old location
+
+        # Migrate remapper defaults
+        profile.setdefault("remapper", copy.deepcopy(_DEFAULT_SETTINGS["remapper"]))
+        for key, val in _DEFAULT_SETTINGS["remapper"].items():
+            profile["remapper"].setdefault(key, copy.deepcopy(val) if isinstance(val, (dict, list)) else val)
+
     return data
 
 
@@ -88,8 +103,9 @@ def loadProfile(data: dict, name: str) -> dict | None:
         return None
     data["active"] = name
     settings = copy.deepcopy(data["profiles"][name])
-    settings["recoil"]["enabled"] = False
+    settings["recoil"]["enabled"]    = False
     settings["crosshair"]["enabled"] = False
+    settings["remapper"]["enabled"]  = False
     save(data)
     return settings
 

@@ -24,6 +24,7 @@ def main():
     engine.setToggleCallback(overlay.setEnabled)
     engine.setOverlayCallback(overlay.toggleOverlay)
     engine.setStrengthCallback(overlay.onStrengthChanged)
+    engine.setQuitCallback(overlay.quit)
 
     overlay.run()
 
