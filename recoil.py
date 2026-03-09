@@ -179,7 +179,7 @@ class RecoilEngine:
                 sy = self._settings["strength_y"]
                 window_filter = self._fullSettings.get("window_filter", "")
 
-            if enabled and self.isActive and self._windowMatchesFilter(window_filter):
+            if enabled and self.isActive and self.windowMatchesFilter(window_filter):
                 interception.move_relative(0, sy)
 
             time.sleep(0.05)
@@ -334,7 +334,7 @@ class RecoilEngine:
                     if sig[1] == bind.get("code") and sig[2] == bind.get("e0", False):
                         return False
 
-        if not self._windowMatchesFilter(window_filter):
+        if not self.windowMatchesFilter(window_filter):
             return False
 
         to_input = None
@@ -375,7 +375,7 @@ class RecoilEngine:
             return sig[1] == inp.get("direction")
         return False
 
-    def _windowMatchesFilter(self, filter_name: str) -> bool:
+    def windowMatchesFilter(self, filter_name: str) -> bool:
         if not filter_name:
             return True
         if not _WIN32_AVAILABLE:

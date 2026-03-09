@@ -145,6 +145,8 @@ def buildPlusMinusRow(frame, label: str, var: tk.IntVar,
         entry.select_range(0, "end")
 
     def onCommit(_=None):
+        if entry.cget("state") == "readonly":
+            return
         try:
             val = max(minVal, min(maxVal, int(entry.get())))
             var.set(val)

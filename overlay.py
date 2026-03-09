@@ -99,7 +99,7 @@ class Overlay:
         self._recoilPanel = RecoilPanel(
             self._root, self._settings, self._engine, self._onSettingsChanged)
         self._crosshairPanel = CrosshairPanel(
-            self._root, self._settings, self._onSettingsChanged)
+            self._root, self._settings, self._engine, self._onSettingsChanged)
         self._remapperPanel = RemapperPanel(
             self._root, self._settings, self._onSettingsChanged)
         self._profilesPanel = ProfilesPanel(

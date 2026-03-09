@@ -98,7 +98,7 @@ class RemapperPanel(Panel):
         row.pack(fill="x", pady=1)
 
         fromBtn = tk.Button(row, text=_inputLabel(mapping["from"]),
-                            width=9, command=lambda i=index: self._editFrom(i),
+                            width=9, command=lambda m=mapping: self._editFrom(m),
                             bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
                             font=("Segoe UI", 9), cursor="hand2")
         fromBtn.pack(side="left")
@@ -107,12 +107,12 @@ class RemapperPanel(Panel):
                  font=("Segoe UI", 9)).pack(side="left", padx=4)
 
         toBtn = tk.Button(row, text=_inputLabel(mapping["to"]),
-                          width=9, command=lambda i=index: self._editTo(i),
+                          width=9, command=lambda m=mapping: self._editTo(m),
                           bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
                           font=("Segoe UI", 9), cursor="hand2")
         toBtn.pack(side="left")
 
-        tk.Button(row, text="×", command=lambda i=index: self._deleteMapping(i),
+        tk.Button(row, text="×", command=lambda m=mapping: self._deleteMapping(m),
                   bg=theme.BTN_BG, fg="#ff6666", relief="flat",
                   font=("Segoe UI", 9), padx=4, cursor="hand2").pack(side="right")
 
@@ -127,18 +127,18 @@ class RemapperPanel(Panel):
         self._startCapture("FROM: Press any key or button...", self._onFromCaptured,
                            allow_scroll=True)
 
-    def _editFrom(self, index: int):
+    def _editFrom(self, mapping: dict):
         if self._capturing:
             return
         self._startCapture("FROM: Press any key or button...",
-                           lambda inp: self._onEditFromCaptured(index, inp),
+                           lambda inp: self._onEditFromCaptured(mapping, inp),
                            allow_scroll=True)
 
-    def _editTo(self, index: int):
+    def _editTo(self, mapping: dict):
         if self._capturing:
             return
         self._startCapture("TO: Press any key or button (or scroll)...",
-                           lambda inp: self._onEditToCaptured(index, inp),
+                           lambda inp: self._onEditToCaptured(mapping, inp),
                            allow_scroll=True)
 
     def _onFromCaptured(self, inp: dict):
@@ -162,30 +162,33 @@ class RemapperPanel(Panel):
         self._refreshMappingRows()
         self._onSettingsChanged(self._settings)
 
-    def _onEditFromCaptured(self, index: int, inp: dict):
+    def _onEditFromCaptured(self, mapping: dict, inp: dict):
         if inp is None:
             return
         if self._isProtected(inp):
             return
         mappings = self._settings["remapper"]["mappings"]
-        if 0 <= index < len(mappings):
-            mappings[index]["from"] = inp
+        if any(m is mapping for m in mappings):
+            mapping["from"] = inp
             self._refreshMappingRows()
             self._onSettingsChanged(self._settings)
 
-    def _onEditToCaptured(self, index: int, inp: dict):
+    def _onEditToCaptured(self, mapping: dict, inp: dict):
         if inp is None:
             return
         mappings = self._settings["remapper"]["mappings"]
-        if 0 <= index < len(mappings):
-            mappings[index]["to"] = inp
+        if any(m is mapping for m in mappings):
+            mapping["to"] = inp
             self._refreshMappingRows()
             self._onSettingsChanged(self._settings)
 
-    def _deleteMapping(self, index: int):
+    def _deleteMapping(self, mapping: dict):
         mappings = self._settings["remapper"]["mappings"]
-        if 0 <= index < len(mappings):
-            del mappings[index]
+        try:
+            idx = next(i for i, m in enumerate(mappings) if m is mapping)
+            del mappings[idx]
+        except StopIteration:
+            pass
         self._refreshMappingRows()
         self._onSettingsChanged(self._settings)
 

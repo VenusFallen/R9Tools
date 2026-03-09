@@ -4,14 +4,6 @@ from tkinter import ttk
 import theme
 from panels.base import Panel
 
-try:
-    import win32gui
-    import win32process
-    import psutil
-    _WIN32_AVAILABLE = True
-except ImportError:
-    _WIN32_AVAILABLE = False
-
 _POLL_MS = 500   # foreground-window check interval
 
 
@@ -27,9 +19,10 @@ class CrosshairPanel(Panel):
     STYLE_KEYS = ["dot", "cross", "dot_cross", "circle", "circle_dot"]
     CANVAS_HALF = 100   # 200×200 canvas; crosshair drawn at (100, 100)
 
-    def __init__(self, root: tk.Tk, settings: dict, onSettingsChanged):
+    def __init__(self, root: tk.Tk, settings: dict, engine, onSettingsChanged):
         super().__init__(root)
         self._settings          = settings
+        self._engine            = engine
         self._onSettingsChanged = onSettingsChanged
         self._sw = root.winfo_screenwidth()
         self._sh = root.winfo_screenheight()
@@ -140,17 +133,7 @@ class CrosshairPanel(Panel):
     def _foregroundMatches(self) -> bool:
         """Returns True when the crosshair should be visible given the current window filter."""
         filter_name = self._settings.get("window_filter", "")
-        if not filter_name:
-            return True
-        if not _WIN32_AVAILABLE:
-            return True
-        try:
-            hwnd = win32gui.GetForegroundWindow()
-            _, pid = win32process.GetWindowThreadProcessId(hwnd)
-            name = psutil.Process(pid).name().lower()
-            return name == filter_name.lower()
-        except Exception:
-            return True   # transient error — allow through rather than hiding crosshair
+        return self._engine.windowMatchesFilter(filter_name)
 
     # ------------------------------------------------------------------
     # Panel — tab UI, shown/hidden with overlay menu
