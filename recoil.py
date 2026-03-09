@@ -385,8 +385,10 @@ class RecoilEngine:
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
             name = psutil.Process(pid).name().lower()
             return name == filter_name.lower()
+        except psutil.NoSuchProcess:
+            return False  # process died — don't activate
         except Exception:
-            return True   # transient error — allow through rather than disabling
+            return True   # transient OS error — allow through
 
     def _sendSynthesized(self, to: dict, is_up: bool, inter=None):
         t = to.get("type")

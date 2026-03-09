@@ -235,8 +235,8 @@ class KeybindButton:
         if newBinding is not None:
             self._binding = newBinding
             label = self._bindingLabel()
-            self._btn.winfo_toplevel().after(0, lambda: self._finish(label))
-            self._onChange(newBinding)
+            binding = newBinding
+            self._btn.winfo_toplevel().after(0, lambda: (self._finish(label), self._onChange(binding)))
 
     def _finish(self, label: str):
         self._var.set(label)
