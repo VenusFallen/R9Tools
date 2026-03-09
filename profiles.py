@@ -6,6 +6,7 @@ PROFILES_FILE = os.path.join(os.path.dirname(__file__), "profiles.json")
 DEFAULT_NAME = "Default"
 
 _DEFAULT_SETTINGS = {
+    "theme": "Dark",
     "window_filter": "",
     "recoil": {
         "enabled": False,
@@ -75,6 +76,7 @@ def load() -> dict:
             profile["hotkeys"].setdefault(key, copy.deepcopy(val))
 
         # Migrate top-level window_filter (moved out of remapper)
+        profile.setdefault("theme", "Dark")
         profile.setdefault("window_filter", "")
         profile.get("remapper", {}).pop("window_filter", None)  # remove old location
 

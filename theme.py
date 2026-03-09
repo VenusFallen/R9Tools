@@ -8,30 +8,72 @@ import threading
 import interception
 
 # ---------------------------------------------------------------------------
-# Layout constants
+# Layout constants (not theme-dependent)
 # ---------------------------------------------------------------------------
 TOPBAR_H     = 30
 PANEL_OFFSET = 5
 PANEL_Y      = TOPBAR_H + PANEL_OFFSET  # 35
 
-# ---------------------------------------------------------------------------
-# Colors
-# ---------------------------------------------------------------------------
-BG_TRANS   = "#000001"   # transparent / click-through color
-BAR_BG     = "#141414"
-PANEL_BG   = "#1e1e1e"
-BTN_BG     = "#2d2d2d"
-BTN_FG     = "#ffffff"
-LABEL_FG   = "#cccccc"
-ACCENT     = "#ffffff"
-DIM        = "#888888"
-ACTIVE_FG  = "#ffff88"
-BORDER_CLR = "#6B8E23"   # olive drab topbar border
+BG_TRANS   = "#000001"   # transparent / click-through (never changes)
+BORDER_CLR = "#6B8E23"   # olive drab topbar border (never changes)
 
 FLASH_SAVE   = "#44ff88"
 FLASH_LOAD   = "#4488ff"
 FLASH_DELETE = "#ff4444"
 FLASH_MS     = 400
+
+# ---------------------------------------------------------------------------
+# Theme palettes
+# ---------------------------------------------------------------------------
+THEMES = {
+    "Dark": {
+        "BAR_BG":   "#141414",
+        "PANEL_BG": "#1e1e1e",
+        "BTN_BG":   "#2d2d2d",
+        "BTN_FG":   "#ffffff",
+        "LABEL_FG": "#cccccc",
+        "ACCENT":   "#ffffff",
+        "DIM":      "#888888",
+        "ACTIVE_FG":"#ffff88",
+        "ENTRY_BG": "#333333",
+    },
+    "Light": {
+        "BAR_BG":   "#c4c8cc",
+        "PANEL_BG": "#f0f2f4",
+        "BTN_BG":   "#b0b6bc",
+        "BTN_FG":   "#0d0d0d",
+        "LABEL_FG": "#2a2a2a",
+        "ACCENT":   "#0d0d0d",
+        "DIM":      "#606060",
+        "ACTIVE_FG":"#004e99",
+        "ENTRY_BG": "#dde0e4",
+    },
+}
+
+THEME_NAMES = list(THEMES.keys())
+
+
+def setTheme(name: str) -> None:
+    """Update module-level color globals to the named theme palette."""
+    palette = THEMES.get(name, THEMES["Dark"])
+    g = globals()
+    for key, val in palette.items():
+        g[key] = val
+
+
+# ---------------------------------------------------------------------------
+# Active theme color globals — initialised to Dark
+# (these are updated in-place by setTheme())
+# ---------------------------------------------------------------------------
+BAR_BG    = THEMES["Dark"]["BAR_BG"]
+PANEL_BG  = THEMES["Dark"]["PANEL_BG"]
+BTN_BG    = THEMES["Dark"]["BTN_BG"]
+BTN_FG    = THEMES["Dark"]["BTN_FG"]
+LABEL_FG  = THEMES["Dark"]["LABEL_FG"]
+ACCENT    = THEMES["Dark"]["ACCENT"]
+DIM       = THEMES["Dark"]["DIM"]
+ACTIVE_FG = THEMES["Dark"]["ACTIVE_FG"]
+ENTRY_BG  = THEMES["Dark"]["ENTRY_BG"]
 
 # ---------------------------------------------------------------------------
 # Input constants
@@ -94,8 +136,8 @@ def buildPlusMinusRow(frame, label: str, var: tk.IntVar,
 
     entry = tk.Entry(row, textvariable=var, width=4,
                      font=("Segoe UI", 9), justify="center",
-                     bg="#333333", fg=BTN_FG, relief="flat",
-                     state="readonly", readonlybackground="#333333",
+                     bg=ENTRY_BG, fg=BTN_FG, relief="flat",
+                     state="readonly", readonlybackground=ENTRY_BG,
                      cursor="xterm", insertbackground=BTN_FG)
 
     def onClickEntry(_):
@@ -123,17 +165,12 @@ def buildPlusMinusRow(frame, label: str, var: tk.IntVar,
 
 
 class KeybindButton:
-    """Reusable single-key capture widget (keyboard only).
-
-    Renders a label + button showing the current binding. On click, starts an
-    interception capture thread that waits for a key release, then calls
-    `onChange({"code": int, "e0": bool})`.
-    """
+    """Reusable single-key capture widget (keyboard only)."""
 
     def __init__(self, frame, label: str, binding: dict, onChange, onCapture=None):
-        self._binding   = dict(binding)   # {"code": int, "e0": bool}
+        self._binding   = dict(binding)
         self._onChange  = onChange
-        self._onCapture = onCapture       # callable(bool) — True=start, False=end
+        self._onCapture = onCapture
         self._capturing = False
 
         row = tk.Frame(frame, bg=PANEL_BG)

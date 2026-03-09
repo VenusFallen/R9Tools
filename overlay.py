@@ -2,11 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 import profiles as prof
 
-from theme import (
-    BG_TRANS, BAR_BG, BTN_BG, BTN_FG, DIM, ACCENT, BORDER_CLR,
-    FLASH_LOAD, FLASH_SAVE, FLASH_DELETE, FLASH_MS,
-    TOPBAR_H, PANEL_Y,
-)
+import theme
 from panels.recoil    import RecoilPanel
 from panels.crosshair import CrosshairPanel
 from panels.remapper  import RemapperPanel
@@ -45,44 +41,43 @@ class Overlay:
         sh = self._root.winfo_screenheight()
         self._root.geometry(f"{sw}x{sh}+0+0")
 
-        self._root.configure(bg=BG_TRANS)
-        self._root.attributes("-transparentcolor", BG_TRANS)
+        self._root.configure(bg=theme.BG_TRANS)
+        self._root.attributes("-transparentcolor", theme.BG_TRANS)
 
-        # Style ttk dropdowns to match dark theme
-        style = ttk.Style(self._root)
-        style.theme_use("default")
-        style.configure("TCombobox",
-                         fieldbackground="#333333", background=BTN_BG,
-                         foreground=BTN_FG, arrowcolor=BTN_FG,
-                         selectbackground="#444444", selectforeground=BTN_FG)
-        style.map("TCombobox", fieldbackground=[("readonly", "#333333")])
-        self._root.option_add("*TCombobox*Listbox.background", "#333333")
-        self._root.option_add("*TCombobox*Listbox.foreground", BTN_FG)
-        self._root.option_add("*TCombobox*Listbox.selectBackground", "#555555")
-        self._root.option_add("*TCombobox*Listbox.selectForeground", BTN_FG)
+        self._style = ttk.Style(self._root)
+        self._style.theme_use("default")
+        self._applyTtkStyle()
 
         self._buildTopBar()
         self._buildPanels()
         self._buildStrengthIndicator(sw, sh)
         self._hideOverlay()
 
+    def _applyTtkStyle(self):
+        self._style.configure("TCombobox",
+                              fieldbackground=theme.ENTRY_BG, background=theme.BTN_BG,
+                              foreground=theme.BTN_FG, arrowcolor=theme.BTN_FG,
+                              selectbackground=theme.BTN_BG, selectforeground=theme.BTN_FG)
+        self._style.map("TCombobox", fieldbackground=[("readonly", theme.ENTRY_BG)])
+        self._root.option_add("*TCombobox*Listbox.background", theme.ENTRY_BG)
+        self._root.option_add("*TCombobox*Listbox.foreground", theme.BTN_FG)
+        self._root.option_add("*TCombobox*Listbox.selectBackground", theme.BTN_BG)
+        self._root.option_add("*TCombobox*Listbox.selectForeground", theme.BTN_FG)
+
     def _buildTopBar(self):
-        self._topBar       = tk.Frame(self._root, bg=BAR_BG)
-        self._topBarBorder = tk.Frame(self._root, bg=BORDER_CLR)
-        # Dict keyed by tab index so pack order and logical index are independent
+        self._topBar       = tk.Frame(self._root, bg=theme.BAR_BG)
+        self._topBarBorder = tk.Frame(self._root, bg=theme.BORDER_CLR)
         self._tabButtons: dict[int, tk.Button] = {}
 
-        # Left feature tabs (packed left, in order)
         self._addTab("RECOIL",    _TAB_RECOIL,    side="left")
         self._addTab("CROSSHAIR", _TAB_CROSSHAIR, side="left")
         self._addTab("REMAPPER",  _TAB_REMAPPER,  side="left")
 
-        # Right program tabs — pack QUIT rightmost, then SETTINGS, then PROFILES
         tk.Button(self._topBar, text="QUIT",
                   command=self._root.destroy,
-                  bg=BAR_BG, fg="#ff6666", relief="flat",
+                  bg=theme.BAR_BG, fg="#ff6666", relief="flat",
                   font=("Segoe UI", 9, "bold"), padx=12,
-                  activebackground=BTN_BG, activeforeground="#ff6666",
+                  activebackground=theme.BTN_BG, activeforeground="#ff6666",
                   cursor="hand2").pack(side="right")
         self._addTab("SETTINGS",  _TAB_SETTINGS,  side="right")
         self._addTab("PROFILES",  _TAB_PROFILES,  side="right")
@@ -93,9 +88,9 @@ class Overlay:
     def _addTab(self, label: str, index: int, side: str = "left"):
         btn = tk.Button(self._topBar, text=label,
                         command=lambda i=index: self._selectTab(i),
-                        bg=BAR_BG, fg=DIM, relief="flat",
+                        bg=theme.BAR_BG, fg=theme.DIM, relief="flat",
                         font=("Segoe UI", 9, "bold"), padx=12,
-                        activebackground=BTN_BG, activeforeground=ACCENT,
+                        activebackground=theme.BTN_BG, activeforeground=theme.ACCENT,
                         cursor="hand2")
         btn.pack(side=side)
         self._tabButtons[index] = btn
@@ -114,7 +109,8 @@ class Overlay:
             onDelete=self._onProfileDelete)
         self._settingsPanel = SettingsPanel(
             self._root, self._settings, self._onSettingsChanged,
-            onCapture=self._engine.setSuspendHotkeys)
+            onCapture=self._engine.setSuspendHotkeys,
+            onThemeChanged=self._onThemeChanged)
 
         self._panels = {
             _TAB_RECOIL:    self._recoilPanel,
@@ -123,7 +119,7 @@ class Overlay:
             _TAB_PROFILES:  self._profilesPanel,
             _TAB_SETTINGS:  self._settingsPanel,
         }
-        self._tabButtons[_TAB_RECOIL].config(fg=ACCENT, bg=BTN_BG)
+        self._tabButtons[_TAB_RECOIL].config(fg=theme.ACCENT, bg=theme.BTN_BG)
 
     def _buildStrengthIndicator(self, sw: int, sh: int):
         W, H = 35, 24
@@ -132,7 +128,7 @@ class Overlay:
         self._siX = sw // 2 - x_off - W // 2
         self._siY = sh // 2 - y_off - H // 2
         self._siCanvas = tk.Canvas(self._root, width=W, height=H,
-                                   bg=BG_TRANS, highlightthickness=0)
+                                   bg=theme.BG_TRANS, highlightthickness=0)
         self._siHideId = None
         self._siFont   = ("Segoe UI", 12, "bold")
         self._siCx     = W // 2
@@ -141,8 +137,8 @@ class Overlay:
     def _selectTab(self, index: int):
         self._activeTab = index
         for i, btn in self._tabButtons.items():
-            btn.config(fg=ACCENT if i == index else DIM,
-                       bg=BTN_BG if i == index else BAR_BG)
+            btn.config(fg=theme.ACCENT if i == index else theme.DIM,
+                       bg=theme.BTN_BG if i == index else theme.BAR_BG)
         for i, panel in self._panels.items():
             if i == index:
                 panel.show()
@@ -155,6 +151,37 @@ class Overlay:
         self._selectTab(indices[(current + direction) % len(indices)])
 
     # ------------------------------------------------------------------
+    # Theme rebuild
+    # ------------------------------------------------------------------
+
+    def _onThemeChanged(self, name: str):
+        theme.setTheme(name)
+        self._rebuildUI()
+
+    def _rebuildUI(self):
+        was_visible = self._visible
+        active_tab  = self._activeTab
+
+        # Destroy topbar and all panels
+        self._topBar.destroy()
+        self._topBarBorder.destroy()
+        for panel in self._panels.values():
+            panel._border.destroy()
+
+        # Apply updated ttk style
+        self._applyTtkStyle()
+
+        # Rebuild
+        self._buildTopBar()
+        self._buildPanels()
+
+        # Always reopen the overlay after a theme switch so the user sees the result.
+        # Reset _visible first so _showOverlay() bypasses its early-return guard.
+        self._visible = False
+        self._showOverlay()
+        self._selectTab(active_tab)
+
+    # ------------------------------------------------------------------
     # Show / hide
     # ------------------------------------------------------------------
 
@@ -162,8 +189,8 @@ class Overlay:
         if self._visible:
             return
         self._visible = True
-        self._topBar.place(x=0, y=0, relwidth=1.0, height=TOPBAR_H)
-        self._topBarBorder.place(x=0, y=TOPBAR_H, relwidth=1.0, height=2)
+        self._topBar.place(x=0, y=0, relwidth=1.0, height=theme.TOPBAR_H)
+        self._topBarBorder.place(x=0, y=theme.TOPBAR_H, relwidth=1.0, height=2)
         self._selectTab(self._activeTab)
         self._root.focus_force()
 
@@ -175,7 +202,6 @@ class Overlay:
             panel.hide()
 
     def toggleOverlay(self):
-        """Called from engine thread — schedules on tkinter thread."""
         self._root.after(0, self._toggleOverlay)
 
     def _toggleOverlay(self):
@@ -191,7 +217,7 @@ class Overlay:
     def flashBorder(self, color: str):
         try:
             self._topBarBorder.config(bg=color)
-            self._root.after(FLASH_MS, lambda: self._topBarBorder.config(bg=BORDER_CLR))
+            self._root.after(theme.FLASH_MS, lambda: self._topBarBorder.config(bg=theme.BORDER_CLR))
         except tk.TclError:
             pass
 
@@ -203,53 +229,64 @@ class Overlay:
         settings = prof.loadProfile(self._profileData, name)
         if settings is None:
             return
+        old_theme = self._settings.get("theme", "Dark")
         for key in settings:
             self._settings[key] = settings[key]
         self._engine.updateSettings(self._settings)
-        self._recoilPanel.reload(self._settings)
-        self._crosshairPanel.reload(self._settings)
-        self._remapperPanel.reload(self._settings)
-        self._settingsPanel.reload(self._settings)
+        new_theme = self._settings.get("theme", "Dark")
+
+        if new_theme != old_theme:
+            theme.setTheme(new_theme)
+            self._rebuildUI()
+        else:
+            self._recoilPanel.reload(self._settings)
+            self._crosshairPanel.reload(self._settings)
+            self._remapperPanel.reload(self._settings)
+            self._settingsPanel.reload(self._settings)
+
         self._profilesPanel.refreshCombo()
-        self.flashBorder(FLASH_LOAD)
+        self.flashBorder(theme.FLASH_LOAD)
 
     def _onProfileSave(self, name: str):
         success = prof.saveProfile(self._profileData, name, self._settings)
         if success:
             self._profilesPanel.refreshCombo()
-            self.flashBorder(FLASH_SAVE)
+            self.flashBorder(theme.FLASH_SAVE)
 
     def _onProfileDelete(self, name: str):
         wasActive = (name == self._profileData.get("active"))
         success = prof.deleteProfile(self._profileData, name)
         if success:
             self._profilesPanel.refreshCombo()
-            self.flashBorder(FLASH_DELETE)
+            self.flashBorder(theme.FLASH_DELETE)
             if wasActive:
                 settings = prof.loadProfile(self._profileData, prof.DEFAULT_NAME)
                 if settings:
+                    old_theme = self._settings.get("theme", "Dark")
                     for key in settings:
                         self._settings[key] = settings[key]
                     self._engine.updateSettings(self._settings)
-                    self._recoilPanel.reload(self._settings)
-                    self._crosshairPanel.reload(self._settings)
-                    self._remapperPanel.reload(self._settings)
-                    self._settingsPanel.reload(self._settings)
+                    new_theme = self._settings.get("theme", "Dark")
+                    if new_theme != old_theme:
+                        theme.setTheme(new_theme)
+                        self._rebuildUI()
+                    else:
+                        self._recoilPanel.reload(self._settings)
+                        self._crosshairPanel.reload(self._settings)
+                        self._remapperPanel.reload(self._settings)
+                        self._settingsPanel.reload(self._settings)
 
     # ------------------------------------------------------------------
     # Engine callbacks
     # ------------------------------------------------------------------
 
     def quit(self):
-        """Called from engine thread when quit hotkey is pressed."""
         self._root.after(0, self._root.destroy)
 
     def setEnabled(self, state: bool):
-        """Called from engine thread when toggle key is pressed."""
         self._root.after(0, self._applyEnabled, state)
 
     def onStrengthChanged(self, value: int):
-        """Called from engine thread when strength hotkey is pressed."""
         self._root.after(0, self._recoilPanel.updateStrength, value)
         self._root.after(0, self._showStrengthIndicator, value)
 

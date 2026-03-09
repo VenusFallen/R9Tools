@@ -2,7 +2,7 @@ import tkinter as tk
 import threading
 import interception
 
-from theme import PANEL_BG, BTN_BG, BTN_FG, LABEL_FG, ACCENT, DIM, ACTIVE_FG
+import theme
 from panels.base import Panel
 from recoil import MOUSE_BUTTON_FLAGS, _SCROLL_WHEEL_FLAG, scancodeLabel
 
@@ -41,42 +41,42 @@ class RemapperPanel(Panel):
 
     def _build(self):
         tk.Label(self._frame, text="Button Remapper",
-                 fg=ACCENT, bg=PANEL_BG,
+                 fg=theme.ACCENT, bg=theme.PANEL_BG,
                  font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
 
         # Enabled checkbox
-        ctrlRow = tk.Frame(self._frame, bg=PANEL_BG)
+        ctrlRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
         ctrlRow.pack(fill="x", padx=10, pady=(2, 4))
 
         self._enabledVar = tk.BooleanVar(value=False)   # always starts off
         tk.Checkbutton(ctrlRow, text="Enabled", variable=self._enabledVar,
                        command=self._onEnabledChange,
-                       bg=PANEL_BG, fg=LABEL_FG, selectcolor=BTN_BG,
-                       activebackground=PANEL_BG, activeforeground=ACCENT,
+                       bg=theme.PANEL_BG, fg=theme.LABEL_FG, selectcolor=theme.BTN_BG,
+                       activebackground=theme.PANEL_BG, activeforeground=theme.ACCENT,
                        font=("Segoe UI", 9)).pack(side="left")
 
         # Column headers
-        hdrRow = tk.Frame(self._frame, bg=PANEL_BG)
+        hdrRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
         hdrRow.pack(fill="x", padx=10, pady=(4, 1))
-        tk.Label(hdrRow, text="FROM", fg=DIM, bg=PANEL_BG,
+        tk.Label(hdrRow, text="FROM", fg=theme.DIM, bg=theme.PANEL_BG,
                  font=("Segoe UI", 8, "bold"), width=10, anchor="w").pack(side="left")
-        tk.Label(hdrRow, text="→", fg=DIM, bg=PANEL_BG,
+        tk.Label(hdrRow, text="→", fg=theme.DIM, bg=theme.PANEL_BG,
                  font=("Segoe UI", 8)).pack(side="left", padx=4)
-        tk.Label(hdrRow, text="TO", fg=DIM, bg=PANEL_BG,
+        tk.Label(hdrRow, text="TO", fg=theme.DIM, bg=theme.PANEL_BG,
                  font=("Segoe UI", 8, "bold"), width=10, anchor="w").pack(side="left")
 
         # Mappings container
-        self._mapFrame = tk.Frame(self._frame, bg=PANEL_BG)
+        self._mapFrame = tk.Frame(self._frame, bg=theme.PANEL_BG)
         self._mapFrame.pack(fill="x", padx=10)
 
         # Capture status label (hidden unless capturing)
         self._captureLabel = tk.Label(self._frame, text="",
-                                      fg=ACTIVE_FG, bg=PANEL_BG,
+                                      fg=theme.ACTIVE_FG, bg=theme.PANEL_BG,
                                       font=("Segoe UI", 9, "italic"))
 
         # Add mapping button
         tk.Button(self._frame, text="+ Add Mapping", command=self._startAddMapping,
-                  bg=BTN_BG, fg=BTN_FG, relief="flat",
+                  bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
                   font=("Segoe UI", 9), padx=8, cursor="hand2").pack(anchor="w", padx=10, pady=(6, 8))
 
         self._refreshMappingRows()
@@ -94,26 +94,26 @@ class RemapperPanel(Panel):
             self._addMappingRow(i, mapping)
 
     def _addMappingRow(self, index: int, mapping: dict):
-        row = tk.Frame(self._mapFrame, bg=PANEL_BG)
+        row = tk.Frame(self._mapFrame, bg=theme.PANEL_BG)
         row.pack(fill="x", pady=1)
 
         fromBtn = tk.Button(row, text=_inputLabel(mapping["from"]),
                             width=9, command=lambda i=index: self._editFrom(i),
-                            bg=BTN_BG, fg=BTN_FG, relief="flat",
+                            bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
                             font=("Segoe UI", 9), cursor="hand2")
         fromBtn.pack(side="left")
 
-        tk.Label(row, text="→", fg=DIM, bg=PANEL_BG,
+        tk.Label(row, text="→", fg=theme.DIM, bg=theme.PANEL_BG,
                  font=("Segoe UI", 9)).pack(side="left", padx=4)
 
         toBtn = tk.Button(row, text=_inputLabel(mapping["to"]),
                           width=9, command=lambda i=index: self._editTo(i),
-                          bg=BTN_BG, fg=BTN_FG, relief="flat",
+                          bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
                           font=("Segoe UI", 9), cursor="hand2")
         toBtn.pack(side="left")
 
         tk.Button(row, text="×", command=lambda i=index: self._deleteMapping(i),
-                  bg=BTN_BG, fg="#ff6666", relief="flat",
+                  bg=theme.BTN_BG, fg="#ff6666", relief="flat",
                   font=("Segoe UI", 9), padx=4, cursor="hand2").pack(side="right")
 
     # ------------------------------------------------------------------

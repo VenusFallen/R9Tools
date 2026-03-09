@@ -3,10 +3,7 @@ from tkinter import ttk
 import threading
 import interception
 
-from theme import (
-    PANEL_BG, ACCENT, DIM, LABEL_FG, BTN_BG, BTN_FG, ACTIVE_FG,
-    MOUSE_BUTTON_FLAGS, comboLabel, _codeToName, buildPlusMinusRow,
-)
+import theme
 from panels.base import Panel
 
 
@@ -27,30 +24,29 @@ class RecoilPanel(Panel):
         s = self._settings["recoil"]
 
         tk.Label(self._frame, text="Recoil Compensation",
-                 fg=ACCENT, bg=PANEL_BG,
+                 fg=theme.ACCENT, bg=theme.PANEL_BG,
                  font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
 
         self._statusVar = tk.StringVar(value="OFF")
         tk.Label(self._frame, textvariable=self._statusVar,
-                 fg=DIM, bg=PANEL_BG,
+                 fg=theme.DIM, bg=theme.PANEL_BG,
                  font=("Segoe UI", 8)).pack(anchor="w", padx=10, pady=(0, 4))
 
         ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
 
         self._syVar = tk.IntVar(value=s["strength_y"])
-        buildPlusMinusRow(self._frame, "Pull Strength (px)", self._syVar, 1, 30, self._onSyChange)
+        theme.buildPlusMinusRow(self._frame, "Pull Strength (px)", self._syVar, 1, 30, self._onSyChange)
 
         ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
 
-        # Trigger keybind (combo: mouse + keyboard)
-        kbRow = tk.Frame(self._frame, bg=PANEL_BG)
+        kbRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
         kbRow.pack(fill="x", padx=10, pady=(3, 10))
-        tk.Label(kbRow, text="Trigger:", fg=LABEL_FG, bg=PANEL_BG,
+        tk.Label(kbRow, text="Trigger:", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
                  font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
-        self._keybindVar = tk.StringVar(value=comboLabel(s["trigger_keys"]))
+        self._keybindVar = tk.StringVar(value=theme.comboLabel(s["trigger_keys"]))
         self._keybindBtn = tk.Button(kbRow, textvariable=self._keybindVar,
                                      command=self._startCapture,
-                                     bg=BTN_BG, fg=BTN_FG, relief="flat",
+                                     bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
                                      font=("Segoe UI", 9), padx=8, cursor="hand2")
         self._keybindBtn.pack(side="right")
 
@@ -64,7 +60,7 @@ class RecoilPanel(Panel):
         s = settings["recoil"]
         self._settings["recoil"].update(s)
         self._syVar.set(s["strength_y"])
-        self._keybindVar.set(comboLabel(s["trigger_keys"]))
+        self._keybindVar.set(theme.comboLabel(s["trigger_keys"]))
 
     # ------------------------------------------------------------------
     # Engine callback
@@ -98,7 +94,7 @@ class RecoilPanel(Panel):
             pass
 
     # ------------------------------------------------------------------
-    # Trigger keybind capture (combo: mouse + keyboard)
+    # Trigger keybind capture
     # ------------------------------------------------------------------
 
     def _startCapture(self):
@@ -107,7 +103,7 @@ class RecoilPanel(Panel):
         self._capturing = True
         self._engine.setSuspendHotkeys(True)
         self._keybindVar.set("Hold keys...")
-        self._keybindBtn.config(fg=ACTIVE_FG)
+        self._keybindBtn.config(fg=theme.ACTIVE_FG)
         threading.Thread(target=self._captureThread, daemon=True).start()
 
     def _captureThread(self):
@@ -132,25 +128,25 @@ class RecoilPanel(Panel):
                 device.send(stroke)
 
                 if isinstance(stroke, interception.MouseStroke):
-                    for key, (downFlag, upFlag) in MOUSE_BUTTON_FLAGS.items():
+                    for key, (downFlag, upFlag) in theme.MOUSE_BUTTON_FLAGS.items():
                         if stroke.button_flags & downFlag:
                             held.add(key)
                             if key not in seen:
                                 seen.append(key)
                                 self._root.after(0, lambda s=list(seen):
-                                    self._keybindVar.set(comboLabel(s) + " ..."))
+                                    self._keybindVar.set(theme.comboLabel(s) + " ..."))
                         elif stroke.button_flags & upFlag:
                             held.discard(key)
 
                 elif isinstance(stroke, interception.KeyStroke):
-                    name = _codeToName(stroke.code)
+                    name = theme._codeToName(stroke.code)
                     if name:
                         if not (stroke.flags & interception.KeyFlag.KEY_UP):
                             held.add(name)
                             if name not in seen:
                                 seen.append(name)
                                 self._root.after(0, lambda s=list(seen):
-                                    self._keybindVar.set(comboLabel(s) + " ..."))
+                                    self._keybindVar.set(theme.comboLabel(s) + " ..."))
                         else:
                             held.discard(name)
 
@@ -165,6 +161,6 @@ class RecoilPanel(Panel):
         self._root.after(0, lambda: self._finishCapture(combo))
 
     def _finishCapture(self, combo: list):
-        self._keybindVar.set(comboLabel(combo))
-        self._keybindBtn.config(fg=BTN_FG)
+        self._keybindVar.set(theme.comboLabel(combo))
+        self._keybindBtn.config(fg=theme.BTN_FG)
         self._onSettingsChanged(self._settings)

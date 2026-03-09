@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 
-from theme import PANEL_BG, ACCENT, LABEL_FG, BTN_BG, BTN_FG, BG_TRANS, buildPlusMinusRow
+import theme
 from panels.base import Panel
 
 try:
@@ -46,7 +46,7 @@ class CrosshairPanel(Panel):
         size = self.CANVAS_HALF * 2
         self._canvas = tk.Canvas(
             self._root, width=size, height=size,
-            bg=BG_TRANS, highlightthickness=0)
+            bg=theme.BG_TRANS, highlightthickness=0)
         self._placeCanvas()
         if not self._settings["crosshair"]["enabled"]:
             self._canvas.place_forget()
@@ -160,27 +160,27 @@ class CrosshairPanel(Panel):
         s = self._settings["crosshair"]
 
         tk.Label(self._frame, text="Crosshair",
-                 fg=ACCENT, bg=PANEL_BG,
+                 fg=theme.ACCENT, bg=theme.PANEL_BG,
                  font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
 
         ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
 
         # Enabled
         self._enabledVar = tk.BooleanVar(value=s["enabled"])
-        enableRow = tk.Frame(self._frame, bg=PANEL_BG)
+        enableRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
         enableRow.pack(fill="x", padx=10, pady=3)
-        tk.Label(enableRow, text="Enabled", fg=LABEL_FG, bg=PANEL_BG,
+        tk.Label(enableRow, text="Enabled", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
                  font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
         tk.Checkbutton(enableRow, variable=self._enabledVar, command=self._onToggle,
-                       bg=PANEL_BG, activebackground=PANEL_BG,
-                       selectcolor=BTN_BG, fg="#aaffaa").pack(side="left")
+                       bg=theme.PANEL_BG, activebackground=theme.PANEL_BG,
+                       selectcolor=theme.BTN_BG, fg="#aaffaa").pack(side="left")
 
         ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
 
         # Style
-        styleRow = tk.Frame(self._frame, bg=PANEL_BG)
+        styleRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
         styleRow.pack(fill="x", padx=10, pady=3)
-        tk.Label(styleRow, text="Style", fg=LABEL_FG, bg=PANEL_BG,
+        tk.Label(styleRow, text="Style", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
                  font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
         self._styleVar = tk.StringVar(value=self._keyToLabel(s["style"]))
         styleBox = ttk.Combobox(styleRow, textvariable=self._styleVar,
@@ -190,9 +190,9 @@ class CrosshairPanel(Panel):
         styleBox.bind("<<ComboboxSelected>>", lambda _: self._onStyleChange())
 
         # Color
-        colorRow = tk.Frame(self._frame, bg=PANEL_BG)
+        colorRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
         colorRow.pack(fill="x", padx=10, pady=3)
-        tk.Label(colorRow, text="Color", fg=LABEL_FG, bg=PANEL_BG,
+        tk.Label(colorRow, text="Color", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
                  font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
         self._colorVar = tk.StringVar(value=s["color"].capitalize())
         colorBox = ttk.Combobox(colorRow, textvariable=self._colorVar,
@@ -205,20 +205,20 @@ class CrosshairPanel(Panel):
 
         # Size
         self._sizeVar = tk.IntVar(value=s["size"])
-        buildPlusMinusRow(self._frame, "Size", self._sizeVar, 1, 30, self._onParamChange)
+        theme.buildPlusMinusRow(self._frame, "Size", self._sizeVar, 1, 30, self._onParamChange)
 
         # Thickness
         self._thickVar = tk.IntVar(value=s["thickness"])
-        buildPlusMinusRow(self._frame, "Thickness", self._thickVar, 1, 10, self._onParamChange)
+        theme.buildPlusMinusRow(self._frame, "Thickness", self._thickVar, 1, 10, self._onParamChange)
 
         # Gap
         self._gapVar = tk.IntVar(value=s["gap"])
-        buildPlusMinusRow(self._frame, "Gap", self._gapVar, 0, 20, self._onParamChange)
+        theme.buildPlusMinusRow(self._frame, "Gap", self._gapVar, 0, 20, self._onParamChange)
 
         # Outline Size (0 = no outline)
         self._outlineSizeVar = tk.IntVar(value=s["outline_size"])
-        buildPlusMinusRow(self._frame, "Outline Size", self._outlineSizeVar, 0, 5, self._onParamChange)
-        tk.Frame(self._frame, bg=PANEL_BG, height=7).pack()
+        theme.buildPlusMinusRow(self._frame, "Outline Size", self._outlineSizeVar, 0, 5, self._onParamChange)
+        tk.Frame(self._frame, bg=theme.PANEL_BG, height=7).pack()
 
     # ------------------------------------------------------------------
     # Reload (called on profile load)

@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 import profiles as prof
 
-from theme import PANEL_BG, ACCENT, LABEL_FG, BTN_BG, BTN_FG, DIM
+import theme
 from panels.base import Panel
 
 
@@ -18,17 +18,17 @@ class ProfilesPanel(Panel):
 
     def _build(self):
         tk.Label(self._frame, text="Profiles",
-                 fg=ACCENT, bg=PANEL_BG,
+                 fg=theme.ACCENT, bg=theme.PANEL_BG,
                  font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
 
         ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
 
         # Active profile label
-        tk.Label(self._frame, text="Active Profile:", fg=LABEL_FG, bg=PANEL_BG,
+        tk.Label(self._frame, text="Active Profile:", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
                  font=("Segoe UI", 9)).pack(anchor="w", padx=10)
 
         # Combobox + quick-save button
-        comboRow = tk.Frame(self._frame, bg=PANEL_BG)
+        comboRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
         comboRow.pack(fill="x", padx=10, pady=(2, 8))
 
         self._combo = ttk.Combobox(comboRow, state="readonly",
@@ -39,7 +39,7 @@ class ProfilesPanel(Panel):
 
         self._quickSaveBtn = tk.Button(comboRow, text="Save",
                                        command=self._onQuickSave,
-                                       bg=BTN_BG, fg=BTN_FG, relief="flat",
+                                       bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
                                        font=("Segoe UI", 9), padx=6,
                                        cursor="hand2")
         self._quickSaveBtn.pack(side="left")
@@ -48,28 +48,28 @@ class ProfilesPanel(Panel):
         ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
 
         # Name field label
-        tk.Label(self._frame, text="Profile Name:", fg=LABEL_FG, bg=PANEL_BG,
+        tk.Label(self._frame, text="Profile Name:", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
                  font=("Segoe UI", 9)).pack(anchor="w", padx=10, pady=(4, 2))
 
         # Name entry + Save + Delete
-        actionRow = tk.Frame(self._frame, bg=PANEL_BG)
+        actionRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
         actionRow.pack(fill="x", padx=10, pady=(0, 10))
 
         self._nameVar = tk.StringVar()
         tk.Entry(actionRow, textvariable=self._nameVar,
-                 font=("Segoe UI", 9), bg="#333333", fg=BTN_FG,
-                 relief="flat", insertbackground=BTN_FG,
+                 font=("Segoe UI", 9), bg=theme.ENTRY_BG, fg=theme.BTN_FG,
+                 relief="flat", insertbackground=theme.BTN_FG,
                  width=14).pack(side="left", padx=(0, 4))
 
         tk.Button(actionRow, text="Save",
                   command=self._onSaveClick,
-                  bg=BTN_BG, fg=BTN_FG, relief="flat",
+                  bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
                   font=("Segoe UI", 9), padx=6,
                   cursor="hand2").pack(side="left", padx=(0, 2))
 
         tk.Button(actionRow, text="Delete",
                   command=self._onDeleteClick,
-                  bg=BTN_BG, fg="#ff6666", relief="flat",
+                  bg=theme.BTN_BG, fg="#ff6666", relief="flat",
                   font=("Segoe UI", 9), padx=6,
                   cursor="hand2").pack(side="left")
 
@@ -89,7 +89,7 @@ class ProfilesPanel(Panel):
             return
         is_default = self._combo.get() == prof.DEFAULT_NAME
         self._quickSaveBtn.config(state="disabled" if is_default else "normal",
-                                  fg=DIM if is_default else BTN_FG)
+                                  fg=theme.DIM if is_default else theme.BTN_FG)
 
     # internal alias used during build before the public name is needed
     _refreshCombo = refreshCombo
