@@ -382,7 +382,7 @@ class RecoilEngine:
             name = psutil.Process(pid).name().lower()
             return name == filter_name.lower()
         except Exception:
-            return False
+            return True   # transient error — allow through rather than disabling
 
     def _sendSynthesized(self, to: dict, is_up: bool, inter=None):
         t = to.get("type")

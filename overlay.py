@@ -165,6 +165,7 @@ class Overlay:
         # Destroy topbar and all panels
         self._topBar.destroy()
         self._topBarBorder.destroy()
+        self._crosshairPanel._canvas.destroy()
         for panel in self._panels.values():
             panel._border.destroy()
 

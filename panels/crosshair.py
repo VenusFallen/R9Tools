@@ -150,7 +150,7 @@ class CrosshairPanel(Panel):
             name = psutil.Process(pid).name().lower()
             return name == filter_name.lower()
         except Exception:
-            return False
+            return True   # transient error — allow through rather than hiding crosshair
 
     # ------------------------------------------------------------------
     # Panel — tab UI, shown/hidden with overlay menu
