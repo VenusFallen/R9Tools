@@ -147,10 +147,16 @@ class RecoilEngine:
 
     def updateSettings(self, settings: dict):
         with self._lock:
+            active_remaps = dict(self._remapActive)
             self._fullSettings = settings
             self._settings = settings["recoil"]
             self._held.clear()
             self._remapActive.clear()
+
+        # Release any remapped outputs that were held at settings-change time
+        for to_input in active_remaps.values():
+            if to_input.get("type") in ("key", "mouse"):
+                self._sendSynthesized(to_input, True, None)
 
     @property
     def isActive(self) -> bool:
@@ -378,7 +384,7 @@ class RecoilEngine:
         except Exception:
             return False
 
-    def _sendSynthesized(self, to: dict, is_up: bool, inter):
+    def _sendSynthesized(self, to: dict, is_up: bool, inter=None):
         t = to.get("type")
         try:
             if t == "key":
@@ -388,7 +394,7 @@ class RecoilEngine:
                 if to.get("e0"):
                     flags |= interception.KeyFlag.KEY_E0
                 stroke = interception.KeyStroke(to["code"], flags)
-                kb = self._kbDevice or inter._devices.get(inter.keyboard)
+                kb = self._kbDevice or (inter._devices.get(inter.keyboard) if inter else None)
                 if kb:
                     kb.send(stroke)
 
@@ -397,7 +403,7 @@ class RecoilEngine:
                 if pair:
                     flag = pair[1] if is_up else pair[0]
                     stroke = interception.MouseStroke(0, flag, 0, 0, 0)
-                    ms = self._msDevice or inter._devices.get(inter.mouse)
+                    ms = self._msDevice or (inter._devices.get(inter.mouse) if inter else None)
                     if ms:
                         ms.send(stroke)
 
@@ -406,7 +412,7 @@ class RecoilEngine:
                 delta = 120 if direction == "up" else -120
                 data  = delta if delta > 0 else (delta & 0xFFFF)
                 stroke = interception.MouseStroke(0, _SCROLL_WHEEL_FLAG, data, 0, 0)
-                ms = self._msDevice or inter._devices.get(inter.mouse)
+                ms = self._msDevice or (inter._devices.get(inter.mouse) if inter else None)
                 if ms:
                     ms.send(stroke)
 
