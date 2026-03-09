@@ -148,6 +148,10 @@ class RecoilEngine:
     def updateSettings(self, settings: dict):
         with self._lock:
             active_remaps = dict(self._remapActive)
+            # Stop any running strength hold threads before swapping settings
+            for evt in self._strengthHoldEvents.values():
+                evt.set()
+            self._strengthHoldEvents.clear()
             self._fullSettings = settings
             self._settings = settings["recoil"]
             self._held.clear()

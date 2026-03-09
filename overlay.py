@@ -231,9 +231,9 @@ class Overlay:
         if settings is None:
             return
         old_theme = self._settings.get("theme", "Dark")
+        self._engine.updateSettings(settings)
         for key in settings:
             self._settings[key] = settings[key]
-        self._engine.updateSettings(self._settings)
         new_theme = self._settings.get("theme", "Dark")
 
         if new_theme != old_theme:
@@ -264,9 +264,9 @@ class Overlay:
                 settings = prof.loadProfile(self._profileData, prof.DEFAULT_NAME)
                 if settings:
                     old_theme = self._settings.get("theme", "Dark")
+                    self._engine.updateSettings(settings)
                     for key in settings:
                         self._settings[key] = settings[key]
-                    self._engine.updateSettings(self._settings)
                     new_theme = self._settings.get("theme", "Dark")
                     if new_theme != old_theme:
                         theme.setTheme(new_theme)
