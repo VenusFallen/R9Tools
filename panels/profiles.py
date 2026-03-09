@@ -118,3 +118,4 @@ class ProfilesPanel(Panel):
         name = self._nameVar.get().strip()
         if name:
             self._onDelete(name)
+            self._nameVar.set("")
