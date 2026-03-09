@@ -24,6 +24,7 @@ class Overlay:
         self._engine            = engine
         self._onSettingsChanged = onSettingsChanged
         self._visible           = False
+        self._panelVisible      = False
         self._activeTab         = _TAB_RECOIL
         self._buildWindow()
 
@@ -67,23 +68,28 @@ class Overlay:
     def _buildTopBar(self):
         self._topBar       = tk.Frame(self._root, bg=theme.BAR_BG)
         self._topBarBorder = tk.Frame(self._root, bg=theme.BORDER_CLR)
+        self._tabUnderline = tk.Frame(self._topBar, bg=theme.ACCENT, height=2)
         self._tabButtons: dict[int, tk.Button] = {}
 
         self._addTab("RECOIL",    _TAB_RECOIL,    side="left")
         self._addTab("CROSSHAIR", _TAB_CROSSHAIR, side="left")
         self._addTab("REMAPPER",  _TAB_REMAPPER,  side="left")
 
-        tk.Button(self._topBar, text="QUIT",
-                  command=self._root.destroy,
-                  bg=theme.BAR_BG, fg="#ff6666", relief="flat",
-                  font=("Segoe UI", 9, "bold"), padx=12,
-                  activebackground=theme.BTN_BG, activeforeground="#ff6666",
-                  cursor="hand2").pack(side="right")
+        quit_btn = tk.Button(self._topBar, text="QUIT",
+                             command=self._root.destroy,
+                             bg=theme.BAR_BG, fg="#ff6666", relief="flat",
+                             font=("Segoe UI", 9, "bold"), padx=12,
+                             activebackground=theme.BTN_BG, activeforeground="#ff6666",
+                             cursor="hand2")
+        quit_btn.pack(side="right")
+        theme.addTabHoverEffect(quit_btn)
         self._addTab("SETTINGS",  _TAB_SETTINGS,  side="right")
         self._addTab("PROFILES",  _TAB_PROFILES,  side="right")
 
         self._root.bind("<Left>",  lambda _: self._shiftTab(-1))
         self._root.bind("<Right>", lambda _: self._shiftTab(1))
+        self._root.bind("<Up>",    lambda _: self._closePanel())
+        self._root.bind("<Down>",  lambda _: self._openPanel())
 
     def _addTab(self, label: str, index: int, side: str = "left"):
         btn = tk.Button(self._topBar, text=label,
@@ -93,6 +99,7 @@ class Overlay:
                         activebackground=theme.BTN_BG, activeforeground=theme.ACCENT,
                         cursor="hand2")
         btn.pack(side=side)
+        theme.addTabHoverEffect(btn)
         self._tabButtons[index] = btn
 
     def _buildPanels(self):
@@ -135,7 +142,18 @@ class Overlay:
         self._siCy     = H // 2
 
     def _selectTab(self, index: int):
-        self._activeTab = index
+        # Clicking the already-active tab while the panel is open closes it
+        if index == self._activeTab and self._panelVisible:
+            self._panelVisible = False
+            for panel in self._panels.values():
+                panel.hide()
+            for btn in self._tabButtons.values():
+                btn.config(fg=theme.DIM, bg=theme.BAR_BG)
+            self._tabUnderline.place_forget()
+            return
+
+        self._activeTab    = index
+        self._panelVisible = True
         for i, btn in self._tabButtons.items():
             btn.config(fg=theme.ACCENT if i == index else theme.DIM,
                        bg=theme.BTN_BG if i == index else theme.BAR_BG)
@@ -145,10 +163,27 @@ class Overlay:
             else:
                 panel.hide()
 
+        # Position accent underline under the active tab
+        try:
+            self._root.update_idletasks()
+            btn = self._tabButtons[index]
+            self._tabUnderline.place(x=btn.winfo_x(), y=theme.TOPBAR_H - 2,
+                                     width=btn.winfo_width(), height=2)
+        except Exception:
+            pass
+
     def _shiftTab(self, direction: int):
         indices = sorted(self._panels.keys())
         current = indices.index(self._activeTab)
         self._selectTab(indices[(current + direction) % len(indices)])
+
+    def _closePanel(self):
+        if self._panelVisible:
+            self._selectTab(self._activeTab)  # triggers toggle-off
+
+    def _openPanel(self):
+        if not self._panelVisible:
+            self._selectTab(self._activeTab)  # triggers show
 
     # ------------------------------------------------------------------
     # Theme rebuild
@@ -195,7 +230,9 @@ class Overlay:
         self._root.focus_force()
 
     def _hideOverlay(self):
-        self._visible = False
+        self._visible      = False
+        self._panelVisible = False
+        self._tabUnderline.place_forget()
         self._topBar.place_forget()
         self._topBarBorder.place_forget()
         for panel in self._panels.values():

@@ -30,28 +30,6 @@ class SettingsPanel(Panel):
                  fg=theme.ACCENT, bg=theme.PANEL_BG,
                  font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
 
-        # ---- Theme ----
-        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
-        tk.Label(self._frame, text="Theme",
-                 fg=theme.DIM, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=12, pady=(2, 2))
-
-        themeRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
-        themeRow.pack(fill="x", padx=10, pady=(4, 4))
-        tk.Label(themeRow, text="Color Theme:", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
-        self._themeVar = tk.StringVar(value=self._settings.get("theme", "Dark"))
-        self._themeBtns = {}
-        for name in theme.THEME_NAMES:
-            active = (name == self._themeVar.get())
-            btn = tk.Button(themeRow, text=name.upper(),
-                            command=lambda n=name: self._selectTheme(n),
-                            bg=theme.BTN_BG if active else theme.BAR_BG,
-                            fg=theme.ACCENT if active else theme.DIM,
-                            relief="flat", font=("Segoe UI", 9), padx=8, cursor="hand2")
-            btn.pack(side="left", padx=(0, 2))
-            self._themeBtns[name] = btn
-
         # ---- Window Filter ----
         ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
         tk.Label(self._frame, text="Window Filter",
@@ -63,8 +41,9 @@ class SettingsPanel(Panel):
                  font=("Segoe UI", 8),
                  wraplength=220, justify="left").pack(anchor="w", padx=12)
 
-        filterRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
-        filterRow.pack(fill="x", padx=10, pady=(6, 4))
+        filterCard = theme.buildCard(self._frame)
+        filterRow = tk.Frame(filterCard, bg=theme.CARD_BG)
+        filterRow.pack(fill="x", padx=10, pady=6)
 
         self._windowVar = tk.StringVar(value=self._settings.get("window_filter", ""))
         self._windowCombo = ttk.Combobox(filterRow, textvariable=self._windowVar,
@@ -73,9 +52,35 @@ class SettingsPanel(Panel):
         self._windowCombo.pack(side="left")
         self._windowCombo.bind("<<ComboboxSelected>>", self._onWindowChange)
 
-        tk.Button(filterRow, text="↻", command=self._refreshProcesses,
-                  bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
-                  font=("Segoe UI", 9), padx=4, cursor="hand2").pack(side="left", padx=(4, 0))
+        refresh_btn = tk.Button(filterRow, text="↻", command=self._refreshProcesses,
+                                bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
+                                font=("Segoe UI", 9), padx=4, cursor="hand2")
+        refresh_btn.pack(side="left", padx=(4, 0))
+        theme.addHoverEffect(refresh_btn)
+
+        # ---- Theme ----
+        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
+        tk.Label(self._frame, text="Theme",
+                 fg=theme.DIM, bg=theme.PANEL_BG,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=12, pady=(2, 2))
+
+        themeCard = theme.buildCard(self._frame)
+        themeRow = tk.Frame(themeCard, bg=theme.CARD_BG)
+        themeRow.pack(fill="x", padx=10, pady=(4, 6))
+        tk.Label(themeRow, text="Color Theme:", fg=theme.LABEL_FG, bg=theme.CARD_BG,
+                 font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
+        self._themeVar = tk.StringVar(value=self._settings.get("theme", "Dark"))
+        self._themeBtns = {}
+        for name in theme.THEME_NAMES:
+            active = (name == self._themeVar.get())
+            btn = tk.Button(themeRow, text=name.upper(),
+                            command=lambda n=name: self._selectTheme(n),
+                            bg=theme.BTN_BG if active else theme.CARD_BG,
+                            fg=theme.ACCENT if active else theme.DIM,
+                            relief="flat", font=("Segoe UI", 9), padx=8, cursor="hand2")
+            btn.pack(side="left", padx=(0, 2))
+            theme.addHoverEffect(btn)
+            self._themeBtns[name] = btn
 
         # ---- Hotkeys ----
         ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
@@ -159,7 +164,7 @@ class SettingsPanel(Panel):
         self._themeVar.set(name)
         for n, btn in self._themeBtns.items():
             active = (n == name)
-            btn.config(bg=theme.BTN_BG if active else theme.BAR_BG,
+            btn.config(bg=theme.BTN_BG if active else theme.CARD_BG,
                        fg=theme.ACCENT if active else theme.DIM)
         self._onThemeChange()
 
@@ -206,7 +211,7 @@ class SettingsPanel(Panel):
         self._themeVar.set(new_theme)
         for n, btn in self._themeBtns.items():
             active = (n == new_theme)
-            btn.config(bg=theme.BTN_BG if active else theme.BAR_BG,
+            btn.config(bg=theme.BTN_BG if active else theme.CARD_BG,
                        fg=theme.ACCENT if active else theme.DIM)
 
         hk = settings.get("hotkeys", {})

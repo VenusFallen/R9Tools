@@ -27,21 +27,27 @@ class RecoilPanel(Panel):
                  fg=theme.ACCENT, bg=theme.PANEL_BG,
                  font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
 
+        statusRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
+        statusRow.pack(anchor="w", padx=10, pady=(0, 4))
+        self._statusDot = tk.Canvas(statusRow, width=8, height=8,
+                                    bg=theme.PANEL_BG, highlightthickness=0)
+        self._statusDot.pack(side="left", padx=(0, 5))
         self._statusVar = tk.StringVar(value="OFF")
-        tk.Label(self._frame, textvariable=self._statusVar,
-                 fg=theme.DIM, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 8)).pack(anchor="w", padx=10, pady=(0, 4))
+        self._statusLabel = tk.Label(statusRow, textvariable=self._statusVar,
+                                     fg=theme.DIM, bg=theme.PANEL_BG,
+                                     font=("Segoe UI", 8))
+        self._statusLabel.pack(side="left")
+        self._drawStatusDot(theme.DIM)
 
         ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
 
+        card = theme.buildCard(self._frame)
         self._syVar = tk.IntVar(value=s["strength_y"])
-        theme.buildPlusMinusRow(self._frame, "Pull Strength (px)", self._syVar, 1, 30, self._onSyChange)
+        theme.buildPlusMinusRow(card, "Pull Strength (px)", self._syVar, 1, 30, self._onSyChange)
 
-        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
-
-        kbRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
-        kbRow.pack(fill="x", padx=10, pady=(3, 10))
-        tk.Label(kbRow, text="Trigger:", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
+        kbRow = tk.Frame(card, bg=theme.CARD_BG)
+        kbRow.pack(fill="x", padx=10, pady=(3, 6))
+        tk.Label(kbRow, text="Trigger:", fg=theme.LABEL_FG, bg=theme.CARD_BG,
                  font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
         self._keybindVar = tk.StringVar(value=theme.comboLabel(s["trigger_keys"]))
         self._keybindBtn = tk.Button(kbRow, textvariable=self._keybindVar,
@@ -49,6 +55,7 @@ class RecoilPanel(Panel):
                                      bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
                                      font=("Segoe UI", 9), padx=8, cursor="hand2")
         self._keybindBtn.pack(side="right")
+        theme.addHoverEffect(self._keybindBtn)
 
         self._pollStatus()
 
@@ -81,14 +88,24 @@ class RecoilPanel(Panel):
     # Status polling
     # ------------------------------------------------------------------
 
+    def _drawStatusDot(self, color: str):
+        self._statusDot.delete("all")
+        self._statusDot.create_oval(1, 1, 7, 7, fill=color, outline="")
+
     def _pollStatus(self):
         try:
             if self._engine.isActive and self._settings["recoil"]["enabled"]:
                 self._statusVar.set("ACTIVE")
+                self._drawStatusDot("#44ff88")
+                self._statusLabel.config(fg="#44ff88")
             elif self._settings["recoil"]["enabled"]:
                 self._statusVar.set("ON")
+                self._drawStatusDot("#ffaa00")
+                self._statusLabel.config(fg="#ffaa00")
             else:
                 self._statusVar.set("OFF")
+                self._drawStatusDot(theme.DIM)
+                self._statusLabel.config(fg=theme.DIM)
             self._root.after(100, self._pollStatus)
         except tk.TclError:
             pass
