@@ -198,11 +198,12 @@ class SettingsPanel(Panel):
         # Hotkeys
         hk = settings.get("hotkeys", {})
         self._settings["hotkeys"].update(hk)
-        self._overlayBtn.setBinding(hk["overlay_toggle"])
-        self._quitBtn.setBinding(hk["quit"])
-        self._recoilBtn.setBinding(hk["recoil_toggle"])
-        self._strengthDownBtn.setBinding(hk["recoil_strength_down"])
-        self._strengthUpBtn.setBinding(hk["recoil_strength_up"])
+        merged = self._settings["hotkeys"]
+        self._overlayBtn.setBinding(merged["overlay_toggle"])
+        self._quitBtn.setBinding(merged["quit"])
+        self._recoilBtn.setBinding(merged["recoil_toggle"])
+        self._strengthDownBtn.setBinding(merged["recoil_strength_down"])
+        self._strengthUpBtn.setBinding(merged["recoil_strength_up"])
 
     # ------------------------------------------------------------------
     # Change handlers

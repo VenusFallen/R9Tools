@@ -365,7 +365,7 @@ class PanelWindow(QWidget):
 
     @Slot(bool)
     def onRecoilToggled(self, state: bool):
-        self._settingsCallback(self._settings)
+        pass  # Engine already mutated shared cfg dict; poll timer picks up new state
 
     @Slot(int)
     def onStrengthChanged(self, value: int):

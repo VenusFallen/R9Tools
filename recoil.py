@@ -237,6 +237,8 @@ class RecoilEngine:
             if deviceIdx is None:
                 continue
 
+            if deviceIdx >= len(inter._devices):
+                continue
             device = inter._devices[deviceIdx]
             stroke = device.receive()
             if stroke is None:
