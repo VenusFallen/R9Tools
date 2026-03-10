@@ -1,22 +1,26 @@
 """
-Shared UI constants, widget helpers, and reusable widgets.
-Imported by all panel modules and by overlay.py.
+Shared UI constants, widget helpers, and reusable widgets (Qt version).
+Imported by all panel modules and by panel_window.py.
 """
-import tkinter as tk
-from tkinter import ttk
 import threading
-import interception
+
+from PySide6.QtCore import Qt, QTimer, QPoint, Signal, Slot, QEvent
+from PySide6.QtGui  import QPainter, QColor
+from PySide6.QtWidgets import (
+    QWidget, QFrame, QHBoxLayout, QVBoxLayout,
+    QPushButton, QLabel, QLineEdit,
+)
 
 # ---------------------------------------------------------------------------
-# Layout constants (not theme-dependent)
+# Layout constants
 # ---------------------------------------------------------------------------
-TOPBAR_H     = 30
-PANEL_OFFSET = 5
-PANEL_Y      = TOPBAR_H + PANEL_OFFSET  # 35
-PANEL_MIN_W  = 240
-
-BG_TRANS   = "#000001"   # transparent / click-through (never changes)
-BORDER_CLR = "#6B8E23"   # olive drab topbar border (never changes)
+TOPBAR_H            = 36
+TOPBAR_MARGIN_TOP   = 8
+TOPBAR_MARGIN_SIDE  = 12
+TOPBAR_MARGIN_BOTTOM = 4
+TOPBAR_RADIUS       = 10
+PANEL_W             = 260   # content width; window is PANEL_W + SHADOW_SIZE wide
+SHADOW_SIZE         = 10    # extra pixels for drop shadow (right + bottom)
 
 FLASH_SAVE   = "#44ff88"
 FLASH_LOAD   = "#4488ff"
@@ -28,34 +32,34 @@ FLASH_MS     = 400
 # ---------------------------------------------------------------------------
 THEMES = {
     "Dark": {
-        "BAR_BG":        "#141414",
-        "PANEL_BG":      "#1e1e1e",
-        "BTN_BG":        "#2d2d2d",
-        "BTN_FG":        "#ffffff",
-        "LABEL_FG":      "#cccccc",
-        "ACCENT":        "#4a9eff",
-        "DIM":           "#888888",
-        "ACTIVE_FG":     "#ffff88",
-        "ENTRY_BG":      "#333333",
-        "PANEL_BORDER":  "#2a2a2a",
-        "CARD_BG":       "#252525",
-        "HOVER_BG":      "#3a3a3a",
-        "TAB_HOVER_BG":  "#202020",
+        "BAR_BG":       "#141414",
+        "PANEL_BG":     "#1e1e1e",
+        "BTN_BG":       "#2d2d2d",
+        "BTN_FG":       "#ffffff",
+        "LABEL_FG":     "#cccccc",
+        "ACCENT":       "#4a9eff",
+        "DIM":          "#888888",
+        "ACTIVE_FG":    "#22c55e",
+        "ENTRY_BG":     "#333333",
+        "PANEL_BORDER": "#2a2a2a",
+        "CARD_BG":      "#252525",
+        "HOVER_BG":     "#3a3a3a",
+        "TAB_HOVER_BG": "#202020",
     },
     "Light": {
-        "BAR_BG":        "#c4c8cc",
-        "PANEL_BG":      "#f0f2f4",
-        "BTN_BG":        "#b0b6bc",
-        "BTN_FG":        "#0d0d0d",
-        "LABEL_FG":      "#2a2a2a",
-        "ACCENT":        "#1a6fd4",
-        "DIM":           "#606060",
-        "ACTIVE_FG":     "#004e99",
-        "ENTRY_BG":      "#dde0e4",
-        "PANEL_BORDER":  "#9a9ea2",
-        "CARD_BG":       "#e6e8ea",
-        "HOVER_BG":      "#c8ccd0",
-        "TAB_HOVER_BG":  "#bbbfc3",
+        "BAR_BG":       "#c4c8cc",
+        "PANEL_BG":     "#f0f2f4",
+        "BTN_BG":       "#b0b6bc",
+        "BTN_FG":       "#0d0d0d",
+        "LABEL_FG":     "#2a2a2a",
+        "ACCENT":       "#1a6fd4",
+        "DIM":          "#606060",
+        "ACTIVE_FG":    "#16a34a",
+        "ENTRY_BG":     "#dde0e4",
+        "PANEL_BORDER": "#9a9ea2",
+        "CARD_BG":      "#e6e8ea",
+        "HOVER_BG":     "#c8ccd0",
+        "TAB_HOVER_BG": "#bbbfc3",
     },
 }
 
@@ -72,7 +76,7 @@ def setTheme(name: str) -> None:
 
 # ---------------------------------------------------------------------------
 # Active theme color globals — initialised to Dark
-# (these are updated in-place by setTheme())
+# (updated in-place by setTheme())
 # ---------------------------------------------------------------------------
 BAR_BG       = THEMES["Dark"]["BAR_BG"]
 PANEL_BG     = THEMES["Dark"]["PANEL_BG"]
@@ -99,18 +103,6 @@ KEY_LABELS = {
     "mouse_middle": "MMB",
 }
 
-MOUSE_BUTTON_FLAGS = {
-    "mouse_left":   (interception.MouseButtonFlag.MOUSE_LEFT_BUTTON_DOWN,
-                     interception.MouseButtonFlag.MOUSE_LEFT_BUTTON_UP),
-    "mouse_right":  (interception.MouseButtonFlag.MOUSE_RIGHT_BUTTON_DOWN,
-                     interception.MouseButtonFlag.MOUSE_RIGHT_BUTTON_UP),
-    "mouse_middle": (interception.MouseButtonFlag.MOUSE_MIDDLE_BUTTON_DOWN,
-                     interception.MouseButtonFlag.MOUSE_MIDDLE_BUTTON_UP),
-}
-
-# ---------------------------------------------------------------------------
-# Helper functions
-# ---------------------------------------------------------------------------
 
 def keyLabel(key: str) -> str:
     return KEY_LABELS.get(key, key.upper())
@@ -120,267 +112,303 @@ def comboLabel(keys: list) -> str:
     return " + ".join(keyLabel(k) for k in keys) if keys else "None"
 
 
-def _codeToName(code: int) -> str | None:
-    for name, val in vars(interception._keycodes).items():
-        if isinstance(val, int) and val == code:
-            return name
-    return None
+# ---------------------------------------------------------------------------
+# QSS stylesheet generator
+# Call makeQSS() after setTheme() and pass result to widget.setStyleSheet().
+# ---------------------------------------------------------------------------
+
+def makeQSS() -> str:
+    return (
+        f"* {{ font-family: 'Segoe UI Variable Display', 'Segoe UI'; font-size: 9pt; }}"
+
+        f"QWidget {{ background-color: {PANEL_BG}; color: {LABEL_FG}; }}"
+
+        # Cards
+        f"QFrame#card {{ background-color: {CARD_BG}; border-radius: 6px;"
+        f" border: 1px solid {PANEL_BORDER}; }}"
+        f"QFrame#card QLabel  {{ background-color: transparent; color: {LABEL_FG}; }}"
+        f"QFrame#card QLineEdit {{ background-color: {ENTRY_BG}; color: {BTN_FG};"
+        f"  border: none; padding: 2px 4px; border-radius: 3px; }}"
+        f"QFrame#card QPushButton {{ background-color: {BTN_BG}; color: {BTN_FG};"
+        f"  border: none; padding: 2px 4px; border-radius: 4px; }}"
+        f"QFrame#card QPushButton:hover {{ background-color: {HOVER_BG}; }}"
+
+        # General controls
+        f"QPushButton {{ background-color: {BTN_BG}; color: {BTN_FG};"
+        f"  border: none; padding: 3px 8px; border-radius: 4px; }}"
+        f"QPushButton:hover {{ background-color: {HOVER_BG}; }}"
+        f"QPushButton:pressed {{ background-color: {ENTRY_BG}; }}"
+
+        f"QLabel {{ background-color: transparent; color: {LABEL_FG}; }}"
+
+        f"QLineEdit {{ background-color: {ENTRY_BG}; color: {BTN_FG};"
+        f"  border: none; padding: 2px 4px; border-radius: 3px; }}"
+
+        f"QComboBox {{ background-color: {ENTRY_BG}; color: {BTN_FG};"
+        f"  border: none; padding: 2px 6px; border-radius: 3px; }}"
+        f"QComboBox QAbstractItemView {{ background-color: {ENTRY_BG}; color: {BTN_FG};"
+        f"  selection-background-color: {BTN_BG}; selection-color: {BTN_FG}; }}"
+
+        f"QScrollBar:vertical {{ background-color: {PANEL_BG}; width: 8px; border: none; }}"
+        f"QScrollBar::handle:vertical {{ background-color: {BTN_BG}; border-radius: 4px; min-height: 20px; }}"
+        f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
+    )
 
 
-def buildCard(parent) -> tk.Frame:
-    """Grouped control container with CARD_BG background. Returns the frame to pack children into."""
-    card = tk.Frame(parent, bg=CARD_BG)
-    card.pack(fill="x", padx=8, pady=3)
+# ---------------------------------------------------------------------------
+# Widget helpers
+# ---------------------------------------------------------------------------
+
+def buildCard(parent: QWidget) -> QFrame:
+    """Grouped control container with CARD_BG background. Adds itself to parent's layout."""
+    card = QFrame(parent)
+    card.setObjectName("card")
+    inner = QVBoxLayout(card)
+    inner.setContentsMargins(0, 4, 0, 6)
+    inner.setSpacing(0)
+    if parent.layout():
+        parent.layout().addWidget(card)
     return card
 
 
-def addTabHoverEffect(btn: tk.Button) -> None:
-    """Hover highlight for inactive tab buttons only (skips active tab at BTN_BG)."""
-    def on_enter(_):
-        try:
-            if btn.cget("bg") == BAR_BG:
-                btn.config(bg=TAB_HOVER_BG)
-        except tk.TclError:
-            pass
-
-    def on_leave(_):
-        try:
-            if btn.cget("bg") == TAB_HOVER_BG:
-                btn.config(bg=BAR_BG)
-        except tk.TclError:
-            pass
-
-    btn.bind("<Enter>", on_enter, add=True)
-    btn.bind("<Leave>", on_leave, add=True)
-
-
-def addHoverEffect(btn: tk.Button) -> None:
-    """Add subtle HOVER_BG highlight on mouse-over. Restores original bg on leave."""
-    orig_bg = btn.cget("bg")
-
-    def on_enter(_):
-        try:
-            btn.config(bg=HOVER_BG)
-        except tk.TclError:
-            pass
-
-    def on_leave(_):
-        try:
-            btn.config(bg=orig_bg)
-        except tk.TclError:
-            pass
-
-    btn.bind("<Enter>", on_enter, add=True)
-    btn.bind("<Leave>", on_leave, add=True)
+def sectionLabel(parent: QWidget, text: str) -> QLabel:
+    """Uppercase dimmed section heading. Caller is responsible for adding to layout."""
+    lbl = QLabel(text.upper(), parent)
+    lbl.setStyleSheet(
+        f"color: {DIM}; font: bold 7pt 'Segoe UI Variable Display', 'Segoe UI';"
+        f" padding: 10px 10px 2px 10px;")
+    return lbl
 
 
 # ---------------------------------------------------------------------------
-# Shared widgets
+# PlusMinusRow
 # ---------------------------------------------------------------------------
 
-def buildPlusMinusRow(frame, label: str, var: tk.IntVar,
-                      minVal: int, maxVal: int, onChange):
-    row = tk.Frame(frame, bg=PANEL_BG)
-    row.pack(fill="x", padx=10, pady=3)
+class _EditableEntry(QLineEdit):
+    """Read-only QLineEdit that unlocks on click for direct editing."""
 
-    tk.Label(row, text=label, fg=LABEL_FG, bg=PANEL_BG,
-             font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setReadOnly(True)
 
-    def adjust(delta):
-        var.set(max(minVal, min(maxVal, var.get() + delta)))
-        onChange()
+    def mousePressEvent(self, event):
+        if self.isReadOnly():
+            self.setReadOnly(False)
+            self.selectAll()
+        super().mousePressEvent(event)
 
-    btn_minus = tk.Button(row, text="−", command=lambda: adjust(-1),
-                          bg=BTN_BG, fg=BTN_FG, relief="flat",
-                          font=("Segoe UI", 9), width=2, cursor="hand2")
-    btn_minus.pack(side="left", padx=(0, 1))
-    addHoverEffect(btn_minus)
 
-    entry = tk.Entry(row, textvariable=var, width=4,
-                     font=("Segoe UI", 9), justify="center",
-                     bg=ENTRY_BG, fg=BTN_FG, relief="flat",
-                     state="readonly", readonlybackground=ENTRY_BG,
-                     cursor="xterm", insertbackground=BTN_FG)
+class PlusMinusRow(QWidget):
+    """
+    Label + [−] [value] [+] control row.
+    .get() / .set() replace the old tk.IntVar pair.
+    """
 
-    def onClickEntry(_):
-        entry.config(state="normal")
-        entry.select_range(0, "end")
+    def __init__(self, parent: QWidget, label: str, value: int,
+                 minVal: int, maxVal: int, onChange):
+        super().__init__(parent)
+        self._value    = value
+        self._minVal   = minVal
+        self._maxVal   = maxVal
+        self._onChange = onChange
 
-    def onCommit(_=None):
-        if entry.cget("state") == "readonly":
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 3, 10, 3)
+        layout.setSpacing(4)
+
+        lbl = QLabel(label, self)
+        lbl.setFixedWidth(120)
+        layout.addWidget(lbl)
+
+        self._minusBtn = QPushButton("−", self)
+        self._minusBtn.setFixedSize(24, 24)
+        self._minusBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._minusBtn.clicked.connect(lambda: self._adjust(-1))
+        layout.addWidget(self._minusBtn)
+
+        self._entry = _EditableEntry(str(value), self)
+        self._entry.setFixedWidth(40)
+        self._entry.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._entry.editingFinished.connect(self._onCommit)
+        layout.addWidget(self._entry)
+
+        self._plusBtn = QPushButton("+", self)
+        self._plusBtn.setFixedSize(24, 24)
+        self._plusBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._plusBtn.clicked.connect(lambda: self._adjust(1))
+        layout.addWidget(self._plusBtn)
+
+        layout.addStretch()
+
+    def get(self) -> int:
+        return self._value
+
+    def set(self, v: int):
+        self._value = max(self._minVal, min(self._maxVal, v))
+        self._entry.setText(str(self._value))
+
+    def _adjust(self, delta: int):
+        self.set(self._value + delta)
+        self._onChange()
+
+    def _onCommit(self):
+        if self._entry.isReadOnly():
             return
         try:
-            val = max(minVal, min(maxVal, int(entry.get())))
-            var.set(val)
-            onChange()
+            val = max(self._minVal, min(self._maxVal, int(self._entry.text())))
+            self._value = val
+            self._entry.setText(str(val))
+            self._onChange()
         except ValueError:
-            entry.delete(0, "end")
-            entry.insert(0, str(var.get()))
-        entry.config(state="readonly")
-
-    entry.bind("<Button-1>", onClickEntry)
-    entry.bind("<Return>",   onCommit)
-    entry.bind("<FocusOut>", onCommit)
-    entry.pack(side="left", padx=1)
-
-    btn_plus = tk.Button(row, text="+", command=lambda: adjust(1),
-                         bg=BTN_BG, fg=BTN_FG, relief="flat",
-                         font=("Segoe UI", 9), width=2, cursor="hand2")
-    btn_plus.pack(side="left", padx=(1, 0))
-    addHoverEffect(btn_plus)
+            self._entry.setText(str(self._value))
+        self._entry.setReadOnly(True)
 
 
-class ToggleSwitch:
+def buildPlusMinusRow(parent: QWidget, label: str, value: int,
+                      minVal: int, maxVal: int, onChange) -> PlusMinusRow:
+    """Create a PlusMinusRow and add it to parent's layout."""
+    row = PlusMinusRow(parent, label, value, minVal, maxVal, onChange)
+    if parent.layout():
+        parent.layout().addWidget(row)
+    return row
+
+
+# ---------------------------------------------------------------------------
+# ToggleSwitch
+# ---------------------------------------------------------------------------
+
+class ToggleSwitch(QWidget):
     """
-    Pill-shaped sliding toggle. Drop-in replacement for tk.Checkbutton.
-    Accepts a tk.BooleanVar and an optional command callback.
-    Syncs visually with programmatic var changes (via trace).
-    Cancels in-progress animation on rapid clicks.
+    Pill-shaped animated toggle. Drop-in for the old tk-canvas version.
+    .get() / .set() replace the old tk.BooleanVar pair.
+    set() updates visuals without firing the command callback.
     """
 
-    W     = 40    # canvas width
-    H     = 20    # canvas height
-    R     = 8     # knob radius
-    PAD   = 2     # knob padding from pill edge
-    STEPS = 8     # animation steps
-    DELAY = 15    # ms per step  (~120ms total)
+    W     = 40
+    H     = 20
+    R     = 8
+    PAD   = 2
+    STEPS = 8
+    DELAY = 15   # ms per animation step (~120 ms total)
 
-    def __init__(self, parent, variable: tk.BooleanVar, command=None):
-        self._var     = variable
-        self._command = command
-        self._animId  = None
-        self._knobX   = float(self._targetX(variable.get()))
+    def __init__(self, parent=None, value: bool = False, command=None):
+        super().__init__(parent)
+        self._value          = value
+        self._command        = command
+        self._knobX          = float(self._targetX(value))
+        self._target         = self._knobX
+        self._step           = 0.0
+        self._remain         = 0
+        self._captureSuccess = False   # guard used by KeybindButton (not this class)
 
-        self._canvas = tk.Canvas(
-            parent, width=self.W, height=self.H,
-            bg=PANEL_BG, highlightthickness=0, cursor="hand2")
-        self._canvas.bind("<Button-1>", self._onClick)
-        self._canvas.bind("<Destroy>",  self._onDestroy)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._animateStep)
 
-        # Sync visual state with programmatic var changes
-        self._traceName = variable.trace_add("write", self._onVarChange)
+        self.setFixedSize(self.W, self.H)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        self._draw()
+    def get(self) -> bool:
+        return self._value
 
-    # ------------------------------------------------------------------
-    # Public pack/grid/place passthrough
-    # ------------------------------------------------------------------
-
-    def pack(self, **kwargs):
-        self._canvas.pack(**kwargs)
-
-    def grid(self, **kwargs):
-        self._canvas.grid(**kwargs)
-
-    def place(self, **kwargs):
-        self._canvas.place(**kwargs)
+    def set(self, v: bool):
+        """Programmatic update — does NOT fire the command callback."""
+        if v == self._value:
+            return
+        self._value = v
+        self._startAnimation(self._targetX(v))
 
     # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
-    def _targetX(self, value: bool) -> float:
-        return self.W - self.R - self.PAD if value else self.R + self.PAD
+    def _targetX(self, v: bool) -> float:
+        return self.W - self.R - self.PAD if v else self.R + self.PAD
 
-    def _onClick(self, _=None):
-        self._var.set(not self._var.get())
+    def mousePressEvent(self, event):
+        self._value = not self._value
+        self._startAnimation(self._targetX(self._value))
         if self._command:
             self._command()
 
-    def _onVarChange(self, *_):
-        target = self._targetX(self._var.get())
-        if abs(self._knobX - target) < 0.5:
-            return
-        self._startAnimation(target)
-
     def _startAnimation(self, target: float):
-        # Cancel any in-progress animation before starting a new one
-        if self._animId is not None:
-            try:
-                self._canvas.winfo_toplevel().after_cancel(self._animId)
-            except Exception:
-                pass
-            self._animId = None
+        if self._timer.isActive():
+            self._timer.stop()
+        self._target = target
+        self._step   = (target - self._knobX) / self.STEPS
+        self._remain = self.STEPS
+        self._timer.start(self.DELAY)
 
-        step = (target - self._knobX) / self.STEPS
-        self._animateStep(target, step, self.STEPS)
-
-    def _animateStep(self, target: float, step: float, remaining: int):
-        if remaining <= 0:
-            self._knobX = target
-            self._draw()
-            self._animId = None
+    def _animateStep(self):
+        if self._remain <= 0:
+            self._knobX = self._target
+            self.update()
             return
+        self._knobX  += self._step
+        self._remain -= 1
+        self.update()
+        self._timer.start(self.DELAY)
 
-        self._knobX += step
-        self._draw()
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
 
-        try:
-            self._animId = self._canvas.winfo_toplevel().after(
-                self.DELAY,
-                lambda: self._animateStep(target, step, remaining - 1)
-            )
-        except tk.TclError:
-            self._animId = None
+        p.setBrush(QColor(ACCENT if self._value else DIM))
+        p.drawRoundedRect(0, 0, self.W, self.H, self.H // 2, self.H // 2)
 
-    def _draw(self):
-        try:
-            c = self._canvas
-            c.delete("all")
-
-            track = ACCENT if self._var.get() else DIM
-            knob  = PANEL_BG
-
-            # Pill track: two end-caps + center rectangle
-            c.create_oval(0,          0, self.H,          self.H, fill=track, outline="")
-            c.create_oval(self.W - self.H, 0, self.W, self.H, fill=track, outline="")
-            c.create_rectangle(self.H // 2, 0, self.W - self.H // 2, self.H,
-                               fill=track, outline="")
-
-            # Knob
-            x = round(self._knobX)
-            y = self.H // 2
-            c.create_oval(x - self.R, y - self.R, x + self.R, y + self.R,
-                          fill=knob, outline="")
-        except tk.TclError:
-            pass
-
-    def _onDestroy(self, _=None):
-        try:
-            self._var.trace_remove("write", self._traceName)
-        except Exception:
-            pass
-        if self._animId is not None:
-            try:
-                self._canvas.winfo_toplevel().after_cancel(self._animId)
-            except Exception:
-                pass
+        p.setBrush(QColor(PANEL_BG))
+        p.drawEllipse(QPoint(round(self._knobX), self.H // 2), self.R, self.R)
+        p.end()
 
 
-class KeybindButton:
-    """Reusable single-key capture widget (keyboard only)."""
+# ---------------------------------------------------------------------------
+# KeybindButton
+# ---------------------------------------------------------------------------
 
-    def __init__(self, frame, label: str, binding: dict, onChange, onCapture=None):
-        self._binding   = dict(binding)
-        self._onChange  = onChange
-        self._onCapture = onCapture
-        self._capturing = False
+class KeybindButton(QWidget):
+    """
+    Single-key capture widget for hotkey rebinding.
+    Displays the current binding as a button label; click to capture a new key.
+    Uses interception for capture so remapped keys are received correctly.
 
-        row = tk.Frame(frame, bg=PANEL_BG)
-        row.pack(fill="x", padx=10, pady=3)
-        tk.Label(row, text=label, fg=LABEL_FG, bg=PANEL_BG,
-                 font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
-        self._var = tk.StringVar(value=self._bindingLabel())
-        self._btn = tk.Button(row, textvariable=self._var,
-                              command=self._startCapture,
-                              bg=BTN_BG, fg=BTN_FG, relief="flat",
-                              font=("Segoe UI", 9), padx=8, cursor="hand2")
-        self._btn.pack(side="right")
-        addHoverEffect(self._btn)
+    Note: creates a second Interception() context while capturing.
+    This is existing behaviour carried forward from the tkinter version.
+    """
+
+    # Internal signal: fired from capture thread → _finish runs on main thread
+    # via automatic QueuedConnection (cross-thread signal delivery).
+    _done = Signal()
+
+    def __init__(self, parent: QWidget, label: str, binding: dict,
+                 onChange, onCapture=None):
+        super().__init__(parent)
+        self._binding        = dict(binding)
+        self._onChange       = onChange
+        self._onCapture      = onCapture
+        self._capturing      = False
+        self._captureSuccess = False
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 3, 10, 3)
+        layout.setSpacing(4)
+
+        lbl = QLabel(label, self)
+        lbl.setFixedWidth(120)
+        layout.addWidget(lbl)
+
+        layout.addStretch()
+
+        self._btn = QPushButton(self._bindingLabel(), self)
+        self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn.clicked.connect(self._startCapture)
+        layout.addWidget(self._btn)
+
+        self._done.connect(self._finish)
 
     def setBinding(self, binding: dict):
         self._binding = dict(binding)
-        self._var.set(self._bindingLabel())
+        self._btn.setText(self._bindingLabel())
+
+    # ------------------------------------------------------------------
 
     def _bindingLabel(self) -> str:
         from recoil import scancodeLabel
@@ -389,48 +417,47 @@ class KeybindButton:
     def _startCapture(self):
         if self._capturing:
             return
-        self._capturing = True
+        self._capturing      = True
+        self._captureSuccess = False
         if self._onCapture:
             self._onCapture(True)
-        self._var.set("Press a key...")
-        self._btn.config(fg=ACTIVE_FG)
+        self._btn.setText("Press a key...")
+        self._btn.setStyleSheet(f"color: {ACTIVE_FG};")
         threading.Thread(target=self._captureThread, daemon=True).start()
 
     def _captureThread(self):
-        inter = interception.Interception()
-        inter.set_filter(inter.is_keyboard, interception.FilterKeyFlag.FILTER_KEY_ALL)
+        import interception as _ic
+        inter = _ic.Interception()
+        inter.set_filter(inter.is_keyboard, _ic.FilterKeyFlag.FILTER_KEY_ALL)
 
-        newBinding: dict | None = None
         try:
             while self._capturing:
-                deviceIdx = inter.await_input(100)
-                if deviceIdx is None:
+                idx = inter.await_input(100)
+                if idx is None:
                     continue
-                device = inter._devices[deviceIdx]
+                device = inter._devices[idx]
                 stroke = device.receive()
                 if stroke is None:
                     continue
-                device.send(stroke)
+                device.send(stroke)   # pass key through to OS
 
-                if isinstance(stroke, interception.KeyStroke):
-                    if stroke.flags & interception.KeyFlag.KEY_UP:
-                        newBinding = {
+                if isinstance(stroke, _ic.KeyStroke):
+                    if stroke.flags & _ic.KeyFlag.KEY_UP:
+                        self._binding = {
                             "code": stroke.code,
-                            "e0":   bool(stroke.flags & interception.KeyFlag.KEY_E0),
+                            "e0":   bool(stroke.flags & _ic.KeyFlag.KEY_E0),
                         }
+                        self._captureSuccess = True
                         break
         finally:
             self._capturing = False
             if self._onCapture:
                 self._onCapture(False)
+            self._done.emit()   # → _finish() on main thread
 
-        if newBinding is not None:
-            self._binding = newBinding
-            label    = self._bindingLabel()
-            binding  = newBinding
-            self._btn.winfo_toplevel().after(
-                0, lambda: (self._finish(label), self._onChange(binding)))
-
-    def _finish(self, label: str):
-        self._var.set(label)
-        self._btn.config(fg=BTN_FG)
+    @Slot()
+    def _finish(self):
+        self._btn.setText(self._bindingLabel())
+        self._btn.setStyleSheet("")
+        if self._captureSuccess:
+            self._onChange(self._binding)

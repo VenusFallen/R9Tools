@@ -13,6 +13,7 @@ _DEFAULT_SETTINGS = {
         "trigger_keys": ["mouse_left"],
         "strength_y": 5,
         "interval_ms": 10,
+        "humanize": False,
     },
     "crosshair": {
         "enabled": False,
@@ -85,6 +86,11 @@ def load() -> dict:
         profile.setdefault("remapper", copy.deepcopy(_DEFAULT_SETTINGS["remapper"]))
         for key, val in _DEFAULT_SETTINGS["remapper"].items():
             profile["remapper"].setdefault(key, copy.deepcopy(val) if isinstance(val, (dict, list)) else val)
+
+        # Migrate recoil defaults (backfills humanize, interval_ms, etc. into old profiles)
+        profile.setdefault("recoil", copy.deepcopy(_DEFAULT_SETTINGS["recoil"]))
+        for key, val in _DEFAULT_SETTINGS["recoil"].items():
+            profile["recoil"].setdefault(key, copy.deepcopy(val) if isinstance(val, (dict, list)) else val)
 
     return data
 

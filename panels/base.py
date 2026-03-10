@@ -1,27 +1,26 @@
-import tkinter as tk
-import theme
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QWidget, QVBoxLayout
 
 
-class Panel:
-    """Base class for all overlay panels."""
+class Panel(QWidget):
+    """
+    Base class for all overlay panels.
 
-    def __init__(self, root: tk.Tk, right_anchor: bool = False):
-        self._root        = root
-        self._right_anchor = right_anchor
-        self._border = tk.Frame(root, bg=theme.PANEL_BORDER)
-        self._frame  = tk.Frame(self._border, bg=theme.PANEL_BG)
-        self._frame.pack(padx=1, pady=1)
-        tk.Frame(self._frame, bg=theme.PANEL_BG,
-                 width=theme.PANEL_MIN_W, height=1).pack()
+    Subclasses add their widgets to self._layout (a QVBoxLayout, top-aligned).
 
-    def show(self):
-        if self._right_anchor:
-            self._border.place(relx=1.0, y=theme.PANEL_Y, anchor="ne")
-        else:
-            self._border.place(x=0, y=theme.PANEL_Y)
+    right_anchor — when True, PanelWindow repositions itself to the right side
+                   of the screen when this panel is active (Profiles, Settings).
+    """
 
-    def hide(self):
-        self._border.place_forget()
+    def __init__(self, parent: QWidget = None, right_anchor: bool = False):
+        super().__init__(parent)
+        self.right_anchor = right_anchor
+
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 14)
+        self._layout.setSpacing(0)
+        self._layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
     def reload(self, settings: dict):
+        """Called when a profile is loaded. Override in subclasses."""
         pass

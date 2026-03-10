@@ -1,6 +1,10 @@
-import tkinter as tk
 import threading
 import interception
+
+from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtWidgets import (
+    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+)
 
 import theme
 from panels.base import Panel
@@ -10,8 +14,8 @@ _MOUSE_DISPLAY = {
     "mouse_left":   "LMB",
     "mouse_right":  "RMB",
     "mouse_middle": "MMB",
-    "mouse_x1":    "Mouse4",
-    "mouse_x2":    "Mouse5",
+    "mouse_x1":     "Mouse4",
+    "mouse_x2":     "Mouse5",
 }
 
 
@@ -27,12 +31,21 @@ def _inputLabel(inp: dict) -> str:
 
 
 class RemapperPanel(Panel):
-    def __init__(self, root: tk.Tk, settings: dict, onSettingsChanged):
-        super().__init__(root)
+
+    # Fired from capture thread when input is received — no args.
+    # Callback + result stored as instance attrs before emit.
+    _captureDone = Signal()
+
+    def __init__(self, parent, settings: dict, onSettingsChanged):
+        super().__init__(parent)
         self._settings          = settings
         self._onSettingsChanged = onSettingsChanged
         self._capturing         = False
         self._pendingFrom       = None
+        self._pendingCallback   = None
+        self._pendingResult     = None
+
+        self._captureDone.connect(self._onCaptureDone)
         self._build()
 
     # ------------------------------------------------------------------
@@ -40,45 +53,66 @@ class RemapperPanel(Panel):
     # ------------------------------------------------------------------
 
     def _build(self):
-        tk.Label(self._frame, text="Button Remapper",
-                 fg=theme.ACCENT, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
+        title = QLabel("Button Remapper")
+        title.setStyleSheet(
+            f"color: {theme.ACCENT}; font: bold 10pt 'Segoe UI';"
+            f" padding: 8px 10px 2px 10px;")
+        self._layout.addWidget(title)
 
-        # Enabled checkbox
-        ctrlRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
-        ctrlRow.pack(fill="x", padx=10, pady=(2, 4))
-
-        self._enabledVar = tk.BooleanVar(value=False)   # always starts off
-        tk.Label(ctrlRow, text="Enabled", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 9)).pack(side="left")
-        theme.ToggleSwitch(ctrlRow, variable=self._enabledVar,
-                           command=self._onEnabledChange).pack(side="left", padx=(6, 0))
+        # Enabled toggle
+        ctrlRow = QFrame()
+        cl = QHBoxLayout(ctrlRow)
+        cl.setContentsMargins(10, 2, 10, 4)
+        cl.setSpacing(6)
+        cl.addWidget(QLabel("Enabled"))
+        self._enabledSwitch = theme.ToggleSwitch(
+            ctrlRow, value=False, command=self._onEnabledChange)
+        cl.addWidget(self._enabledSwitch)
+        cl.addStretch()
+        self._layout.addWidget(ctrlRow)
 
         # Column headers
-        hdrRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
-        hdrRow.pack(fill="x", padx=10, pady=(4, 1))
-        tk.Label(hdrRow, text="FROM", fg=theme.DIM, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 8, "bold"), width=10, anchor="w").pack(side="left")
-        tk.Label(hdrRow, text="→", fg=theme.DIM, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 8)).pack(side="left", padx=4)
-        tk.Label(hdrRow, text="TO", fg=theme.DIM, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 8, "bold"), width=10, anchor="w").pack(side="left")
+        hdrRow = QFrame()
+        hl = QHBoxLayout(hdrRow)
+        hl.setContentsMargins(10, 4, 10, 1)
+        hl.setSpacing(4)
+        from_lbl = QLabel("FROM")
+        from_lbl.setStyleSheet(f"color: {theme.DIM}; font: bold 8pt 'Segoe UI';")
+        from_lbl.setFixedWidth(72)
+        arr_lbl = QLabel("→")
+        arr_lbl.setStyleSheet(f"color: {theme.DIM};")
+        to_lbl = QLabel("TO")
+        to_lbl.setStyleSheet(f"color: {theme.DIM}; font: bold 8pt 'Segoe UI';")
+        hl.addWidget(from_lbl)
+        hl.addWidget(arr_lbl)
+        hl.addWidget(to_lbl)
+        hl.addStretch()
+        self._layout.addWidget(hdrRow)
 
-        # Mappings container
-        self._mapFrame = tk.Frame(self._frame, bg=theme.PANEL_BG)
-        self._mapFrame.pack(fill="x", padx=10)
+        # Mapping rows container
+        self._mapWidget = QWidget()
+        self._mapWidget.setStyleSheet(f"background-color: {theme.PANEL_BG};")
+        self._mapLayout = QVBoxLayout(self._mapWidget)
+        self._mapLayout.setContentsMargins(10, 0, 10, 0)
+        self._mapLayout.setSpacing(1)
+        self._layout.addWidget(self._mapWidget)
 
         # Capture status label (hidden unless capturing)
-        self._captureLabel = tk.Label(self._frame, text="",
-                                      fg=theme.ACTIVE_FG, bg=theme.PANEL_BG,
-                                      font=("Segoe UI", 9, "italic"))
+        self._captureLabel = QLabel("")
+        self._captureLabel.setStyleSheet(
+            f"color: {theme.ACTIVE_FG}; font: italic 9pt 'Segoe UI';"
+            f" padding: 0px 10px 4px 10px;")
+        self._captureLabel.setVisible(False)
+        self._layout.addWidget(self._captureLabel)
 
         # Add mapping button
-        add_btn = tk.Button(self._frame, text="+ Add Mapping", command=self._startAddMapping,
-                            bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
-                            font=("Segoe UI", 9), padx=8, cursor="hand2")
-        add_btn.pack(anchor="w", padx=10, pady=(6, 8))
-        theme.addHoverEffect(add_btn)
+        addBtn = QPushButton("+ Add Mapping")
+        addBtn.setStyleSheet(
+            f"text-align: left; padding: 3px 10px;"
+            f" margin: 6px 10px 8px 10px;")
+        addBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        addBtn.clicked.connect(self._startAddMapping)
+        self._layout.addWidget(addBtn)
 
         self._refreshMappingRows()
 
@@ -87,39 +121,47 @@ class RemapperPanel(Panel):
     # ------------------------------------------------------------------
 
     def _refreshMappingRows(self):
-        for widget in self._mapFrame.winfo_children():
-            widget.destroy()
+        while self._mapLayout.count():
+            item = self._mapLayout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
 
-        mappings = self._settings["remapper"]["mappings"]
-        for i, mapping in enumerate(mappings):
-            self._addMappingRow(i, mapping)
+        for i, mapping in enumerate(self._settings["remapper"]["mappings"]):
+            self._addMappingRow(mapping)
 
-    def _addMappingRow(self, index: int, mapping: dict):
-        row = tk.Frame(self._mapFrame, bg=theme.PANEL_BG)
-        row.pack(fill="x", pady=1)
+    def _addMappingRow(self, mapping: dict):
+        row = QFrame(self._mapWidget)
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(0, 1, 0, 1)
+        rl.setSpacing(4)
 
-        fromBtn = tk.Button(row, text=_inputLabel(mapping["from"]),
-                            width=9, command=lambda m=mapping: self._editFrom(m),
-                            bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
-                            font=("Segoe UI", 9), cursor="hand2")
-        fromBtn.pack(side="left")
-        theme.addHoverEffect(fromBtn)
+        fromBtn = QPushButton(_inputLabel(mapping["from"]), row)
+        fromBtn.setFixedWidth(72)
+        fromBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        fromBtn.clicked.connect(lambda _, m=mapping: self._editFrom(m))
+        rl.addWidget(fromBtn)
 
-        tk.Label(row, text="→", fg=theme.DIM, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 9)).pack(side="left", padx=4)
+        arr = QLabel("→", row)
+        arr.setStyleSheet(f"color: {theme.DIM};")
+        rl.addWidget(arr)
 
-        toBtn = tk.Button(row, text=_inputLabel(mapping["to"]),
-                          width=9, command=lambda m=mapping: self._editTo(m),
-                          bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
-                          font=("Segoe UI", 9), cursor="hand2")
-        toBtn.pack(side="left")
-        theme.addHoverEffect(toBtn)
+        toBtn = QPushButton(_inputLabel(mapping["to"]), row)
+        toBtn.setFixedWidth(72)
+        toBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        toBtn.clicked.connect(lambda _, m=mapping: self._editTo(m))
+        rl.addWidget(toBtn)
 
-        del_btn = tk.Button(row, text="×", command=lambda m=mapping: self._deleteMapping(m),
-                            bg=theme.BTN_BG, fg="#ff6666", relief="flat",
-                            font=("Segoe UI", 9), padx=4, cursor="hand2")
-        del_btn.pack(side="right")
-        theme.addHoverEffect(del_btn)
+        delBtn = QPushButton("×", row)
+        delBtn.setFixedWidth(24)
+        delBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        delBtn.setStyleSheet(
+            f"QPushButton {{ color: #ff6666; background-color: {theme.BTN_BG}; border: none; }}"
+            f"QPushButton:hover {{ background-color: {theme.HOVER_BG}; }}")
+        delBtn.clicked.connect(lambda _, m=mapping: self._deleteMapping(m))
+        rl.addWidget(delBtn)
+
+        rl.addStretch()
+        self._mapLayout.addWidget(row)
 
     # ------------------------------------------------------------------
     # Add / edit / delete
@@ -129,8 +171,8 @@ class RemapperPanel(Panel):
         if self._capturing:
             return
         self._pendingFrom = None
-        self._startCapture("FROM: Press any key or button...", self._onFromCaptured,
-                           allow_scroll=True)
+        self._startCapture("FROM: Press any key or button...",
+                           self._onFromCaptured, allow_scroll=True)
 
     def _editFrom(self, mapping: dict):
         if self._capturing:
@@ -150,9 +192,10 @@ class RemapperPanel(Panel):
         if inp is None:
             return
         if self._isProtected(inp):
-            self._captureLabel.config(text="That key is protected and cannot be remapped.")
-            self._captureLabel.pack(padx=10, pady=(0, 4))
-            self._root.after(2000, self._captureLabel.pack_forget)
+            self._captureLabel.setText("That key is protected and cannot be remapped.")
+            self._captureLabel.setVisible(True)
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(2000, lambda: self._captureLabel.setVisible(False))
             return
         self._pendingFrom = inp
         self._startCapture("TO: Press any key or button (or scroll)...",
@@ -161,16 +204,14 @@ class RemapperPanel(Panel):
     def _onToCaptured(self, inp: dict):
         if inp is None or self._pendingFrom is None:
             return
-        mappings = self._settings["remapper"]["mappings"]
-        mappings.append({"from": self._pendingFrom, "to": inp})
+        self._settings["remapper"]["mappings"].append(
+            {"from": self._pendingFrom, "to": inp})
         self._pendingFrom = None
         self._refreshMappingRows()
         self._onSettingsChanged(self._settings)
 
     def _onEditFromCaptured(self, mapping: dict, inp: dict):
-        if inp is None:
-            return
-        if self._isProtected(inp):
+        if inp is None or self._isProtected(inp):
             return
         mappings = self._settings["remapper"]["mappings"]
         if any(m is mapping for m in mappings):
@@ -203,7 +244,8 @@ class RemapperPanel(Panel):
         hotkeys = self._settings.get("hotkeys", {})
         for name in ("overlay_toggle", "quit"):
             bind = hotkeys.get(name, {})
-            if inp["code"] == bind.get("code") and inp.get("e0", False) == bind.get("e0", False):
+            if inp["code"] == bind.get("code") and \
+               inp.get("e0", False) == bind.get("e0", False):
                 return True
         return False
 
@@ -212,24 +254,26 @@ class RemapperPanel(Panel):
     # ------------------------------------------------------------------
 
     def _startCapture(self, prompt: str, callback, allow_scroll: bool = False):
-        self._capturing = True
-        self._captureLabel.config(text=prompt)
-        self._captureLabel.pack(padx=10, pady=(0, 4))
+        self._capturing       = True
+        self._pendingCallback = callback
+        self._captureLabel.setText(prompt)
+        self._captureLabel.setVisible(True)
         threading.Thread(target=self._captureThread,
-                         args=(callback, allow_scroll), daemon=True).start()
+                         args=(allow_scroll,), daemon=True).start()
 
-    def _captureThread(self, callback, allow_scroll: bool):
+    def _captureThread(self, allow_scroll: bool):
         inter = interception.Interception()
-        inter.set_filter(inter.is_keyboard, interception.FilterKeyFlag.FILTER_KEY_ALL)
-        inter.set_filter(inter.is_mouse, interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
-
+        inter.set_filter(inter.is_keyboard,
+                         interception.FilterKeyFlag.FILTER_KEY_ALL)
+        inter.set_filter(inter.is_mouse,
+                         interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
         result = None
         try:
             while result is None:
-                deviceIdx = inter.await_input(100)
-                if deviceIdx is None:
+                idx = inter.await_input(100)
+                if idx is None:
                     continue
-                device = inter._devices[deviceIdx]
+                device = inter._devices[idx]
                 stroke = device.receive()
                 if stroke is None:
                     continue
@@ -260,23 +304,29 @@ class RemapperPanel(Panel):
         finally:
             self._capturing = False
 
-        self._root.after(0, self._captureLabel.pack_forget)
-        self._root.after(0, lambda: callback(result))
+        self._pendingResult = result
+        self._captureDone.emit()
+
+    @Slot()
+    def _onCaptureDone(self):
+        self._captureLabel.setVisible(False)
+        cb     = self._pendingCallback
+        result = self._pendingResult
+        self._pendingCallback = None
+        self._pendingResult   = None
+        if cb:
+            cb(result)
 
     # ------------------------------------------------------------------
-    # Change handlers
+    # Change handlers / reload
     # ------------------------------------------------------------------
 
     def _onEnabledChange(self):
-        self._settings["remapper"]["enabled"] = self._enabledVar.get()
+        self._settings["remapper"]["enabled"] = self._enabledSwitch.get()
         self._onSettingsChanged(self._settings)
-
-    # ------------------------------------------------------------------
-    # Reload (called on profile load)
-    # ------------------------------------------------------------------
 
     def reload(self, settings: dict):
         self._settings["remapper"].update(settings.get("remapper", {}))
-        self._enabledVar.set(False)
+        self._enabledSwitch.set(False)
         self._settings["remapper"]["enabled"] = False
         self._refreshMappingRows()
