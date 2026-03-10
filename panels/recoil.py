@@ -2,13 +2,42 @@ import threading
 import interception
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
 
 import theme
 from panels.base import Panel
 from recoil import MOUSE_BUTTON_FLAGS, scancodeLabel
 
 _POLL_MS = 100
+
+
+class _StatusDot(QWidget):
+    """8 px dot with optional 14 px glow ring for the ACTIVE state."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._color = "#888888"
+        self._glow  = False
+        self.setFixedSize(14, 14)
+
+    def setState(self, color: str, glow: bool):
+        self._color = color
+        self._glow  = glow
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        if self._glow:
+            c = QColor(self._color)
+            c.setAlpha(70)
+            p.setBrush(c)
+            p.drawEllipse(0, 0, 14, 14)
+        p.setBrush(QColor(self._color))
+        p.drawEllipse(3, 3, 8, 8)
+        p.end()
 
 
 class RecoilPanel(Panel):
@@ -50,14 +79,11 @@ class RecoilPanel(Panel):
         sl = QHBoxLayout(statusRow)
         sl.setContentsMargins(10, 0, 10, 4)
         sl.setSpacing(5)
-        self._statusDot = QLabel()
-        self._statusDot.setFixedSize(8, 8)
-        self._statusDot.setStyleSheet(
-            f"background-color: {theme.DIM}; border-radius: 4px;")
+        self._statusDot = _StatusDot(statusRow)
         sl.addWidget(self._statusDot)
         self._statusLabel = QLabel("OFF")
         self._statusLabel.setStyleSheet(
-            f"color: {theme.DIM}; font: 8pt 'Segoe UI';")
+            f"color: {theme.DIM}; font: 8pt 'Segoe UI Variable Display', 'Segoe UI';")
         sl.addWidget(self._statusLabel)
         sl.addStretch()
         self._layout.addWidget(statusRow)
@@ -131,16 +157,15 @@ class RecoilPanel(Panel):
 
     def _pollStatus(self):
         if self._settings["recoil"]["enabled"] and self._engine.isActive:
-            color, text = "#44ff88", "ACTIVE"
+            color, text, glow = "#22c55e", "ACTIVE", True
         elif self._settings["recoil"]["enabled"]:
-            color, text = "#ffaa00", "ON"
+            color, text, glow = "#ffaa00", "ON", False
         else:
-            color, text = theme.DIM, "OFF"
-        self._statusDot.setStyleSheet(
-            f"background-color: {color}; border-radius: 4px;")
+            color, text, glow = theme.DIM, "OFF", False
+        self._statusDot.setState(color, glow)
         self._statusLabel.setText(text)
         self._statusLabel.setStyleSheet(
-            f"color: {color}; font: 8pt 'Segoe UI';")
+            f"color: {color}; font: 8pt 'Segoe UI Variable Display', 'Segoe UI';")
 
     # ------------------------------------------------------------------
     # Trigger capture

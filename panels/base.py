@@ -17,7 +17,7 @@ class Panel(QWidget):
         self.right_anchor = right_anchor
 
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 8)
+        self._layout.setContentsMargins(0, 0, 0, 14)
         self._layout.setSpacing(0)
         self._layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 

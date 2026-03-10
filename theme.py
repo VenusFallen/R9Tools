@@ -14,11 +14,13 @@ from PySide6.QtWidgets import (
 # ---------------------------------------------------------------------------
 # Layout constants
 # ---------------------------------------------------------------------------
-TOPBAR_H     = 30
-PANEL_OFFSET = 5
-PANEL_Y      = TOPBAR_H + PANEL_OFFSET   # 35
-PANEL_W      = 260                        # fixed panel width (right-anchor: screen_w - PANEL_W)
-BORDER_CLR   = "#6B8E23"                  # olive drab topbar border (never changes)
+TOPBAR_H            = 36
+TOPBAR_MARGIN_TOP   = 8
+TOPBAR_MARGIN_SIDE  = 12
+TOPBAR_MARGIN_BOTTOM = 4
+TOPBAR_RADIUS       = 10
+PANEL_W             = 260   # content width; window is PANEL_W + SHADOW_SIZE wide
+SHADOW_SIZE         = 10    # extra pixels for drop shadow (right + bottom)
 
 FLASH_SAVE   = "#44ff88"
 FLASH_LOAD   = "#4488ff"
@@ -37,7 +39,7 @@ THEMES = {
         "LABEL_FG":     "#cccccc",
         "ACCENT":       "#4a9eff",
         "DIM":          "#888888",
-        "ACTIVE_FG":    "#ffff88",
+        "ACTIVE_FG":    "#22c55e",
         "ENTRY_BG":     "#333333",
         "PANEL_BORDER": "#2a2a2a",
         "CARD_BG":      "#252525",
@@ -52,7 +54,7 @@ THEMES = {
         "LABEL_FG":     "#2a2a2a",
         "ACCENT":       "#1a6fd4",
         "DIM":          "#606060",
-        "ACTIVE_FG":    "#004e99",
+        "ACTIVE_FG":    "#16a34a",
         "ENTRY_BG":     "#dde0e4",
         "PANEL_BORDER": "#9a9ea2",
         "CARD_BG":      "#e6e8ea",
@@ -117,32 +119,33 @@ def comboLabel(keys: list) -> str:
 
 def makeQSS() -> str:
     return (
-        f"* {{ font-family: 'Segoe UI'; font-size: 9pt; }}"
+        f"* {{ font-family: 'Segoe UI Variable Display', 'Segoe UI'; font-size: 9pt; }}"
 
         f"QWidget {{ background-color: {PANEL_BG}; color: {LABEL_FG}; }}"
 
-        # Cards sit inside panel frames and use CARD_BG
-        f"QFrame#card {{ background-color: {CARD_BG}; border-radius: 3px; }}"
+        # Cards
+        f"QFrame#card {{ background-color: {CARD_BG}; border-radius: 6px;"
+        f" border: 1px solid {PANEL_BORDER}; }}"
         f"QFrame#card QLabel  {{ background-color: transparent; color: {LABEL_FG}; }}"
         f"QFrame#card QLineEdit {{ background-color: {ENTRY_BG}; color: {BTN_FG};"
-        f"  border: none; padding: 2px 4px; }}"
+        f"  border: none; padding: 2px 4px; border-radius: 3px; }}"
         f"QFrame#card QPushButton {{ background-color: {BTN_BG}; color: {BTN_FG};"
-        f"  border: none; padding: 2px 4px; }}"
+        f"  border: none; padding: 2px 4px; border-radius: 4px; }}"
         f"QFrame#card QPushButton:hover {{ background-color: {HOVER_BG}; }}"
 
         # General controls
         f"QPushButton {{ background-color: {BTN_BG}; color: {BTN_FG};"
-        f"  border: none; padding: 3px 8px; border-radius: 2px; }}"
+        f"  border: none; padding: 3px 8px; border-radius: 4px; }}"
         f"QPushButton:hover {{ background-color: {HOVER_BG}; }}"
         f"QPushButton:pressed {{ background-color: {ENTRY_BG}; }}"
 
         f"QLabel {{ background-color: transparent; color: {LABEL_FG}; }}"
 
         f"QLineEdit {{ background-color: {ENTRY_BG}; color: {BTN_FG};"
-        f"  border: none; padding: 2px 4px; }}"
+        f"  border: none; padding: 2px 4px; border-radius: 3px; }}"
 
         f"QComboBox {{ background-color: {ENTRY_BG}; color: {BTN_FG};"
-        f"  border: none; padding: 2px 6px; }}"
+        f"  border: none; padding: 2px 6px; border-radius: 3px; }}"
         f"QComboBox QAbstractItemView {{ background-color: {ENTRY_BG}; color: {BTN_FG};"
         f"  selection-background-color: {BTN_BG}; selection-color: {BTN_FG}; }}"
 
@@ -168,6 +171,15 @@ def buildCard(parent: QWidget) -> QFrame:
     return card
 
 
+def sectionLabel(parent: QWidget, text: str) -> QLabel:
+    """Uppercase dimmed section heading. Caller is responsible for adding to layout."""
+    lbl = QLabel(text.upper(), parent)
+    lbl.setStyleSheet(
+        f"color: {DIM}; font: bold 7pt 'Segoe UI Variable Display', 'Segoe UI';"
+        f" padding: 10px 10px 2px 10px;")
+    return lbl
+
+
 # ---------------------------------------------------------------------------
 # PlusMinusRow
 # ---------------------------------------------------------------------------
@@ -188,7 +200,7 @@ class _EditableEntry(QLineEdit):
 
 class PlusMinusRow(QWidget):
     """
-    Label + [+] [value] [−] control row.
+    Label + [−] [value] [+] control row.
     .get() / .set() replace the old tk.IntVar pair.
     """
 
@@ -208,11 +220,11 @@ class PlusMinusRow(QWidget):
         lbl.setFixedWidth(120)
         layout.addWidget(lbl)
 
-        self._plusBtn = QPushButton("+", self)
-        self._plusBtn.setFixedSize(24, 24)
-        self._plusBtn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._plusBtn.clicked.connect(lambda: self._adjust(1))
-        layout.addWidget(self._plusBtn)
+        self._minusBtn = QPushButton("−", self)
+        self._minusBtn.setFixedSize(24, 24)
+        self._minusBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._minusBtn.clicked.connect(lambda: self._adjust(-1))
+        layout.addWidget(self._minusBtn)
 
         self._entry = _EditableEntry(str(value), self)
         self._entry.setFixedWidth(40)
@@ -220,11 +232,11 @@ class PlusMinusRow(QWidget):
         self._entry.editingFinished.connect(self._onCommit)
         layout.addWidget(self._entry)
 
-        self._minusBtn = QPushButton("−", self)
-        self._minusBtn.setFixedSize(24, 24)
-        self._minusBtn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._minusBtn.clicked.connect(lambda: self._adjust(-1))
-        layout.addWidget(self._minusBtn)
+        self._plusBtn = QPushButton("+", self)
+        self._plusBtn.setFixedSize(24, 24)
+        self._plusBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._plusBtn.clicked.connect(lambda: self._adjust(1))
+        layout.addWidget(self._plusBtn)
 
         layout.addStretch()
 

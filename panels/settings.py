@@ -137,19 +137,19 @@ class SettingsPanel(Panel):
             onCapture=self._onCapture)
         self._layout.addWidget(self._recoilBtn)
 
-        self._strengthDownBtn = theme.KeybindButton(
-            self, "Strength -:",
-            binding=hk["recoil_strength_down"],
-            onChange=self._onStrengthDownChange,
-            onCapture=self._onCapture)
-        self._layout.addWidget(self._strengthDownBtn)
-
         self._strengthUpBtn = theme.KeybindButton(
             self, "Strength +:",
             binding=hk["recoil_strength_up"],
             onChange=self._onStrengthUpChange,
             onCapture=self._onCapture)
         self._layout.addWidget(self._strengthUpBtn)
+
+        self._strengthDownBtn = theme.KeybindButton(
+            self, "Strength -:",
+            binding=hk["recoil_strength_down"],
+            onChange=self._onStrengthDownChange,
+            onCapture=self._onCapture)
+        self._layout.addWidget(self._strengthDownBtn)
 
     # ------------------------------------------------------------------
     # Process list

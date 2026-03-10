@@ -36,14 +36,18 @@ class ProfilesPanel(Panel):
         activeLbl.setStyleSheet("padding: 0px 10px;")
         self._layout.addWidget(activeLbl)
 
-        # Combobox + quick-save
+        # Combobox + apply + quick-save
         comboRow = QFrame()
         cl = QHBoxLayout(comboRow)
         cl.setContentsMargins(10, 2, 10, 8)
         cl.setSpacing(4)
         self._combo = QComboBox(comboRow)
-        self._combo.setMinimumWidth(140)
+        self._combo.setMinimumWidth(120)
         cl.addWidget(self._combo)
+        self._applyBtn = QPushButton("Apply", comboRow)
+        self._applyBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._applyBtn.clicked.connect(self._onApplyClick)
+        cl.addWidget(self._applyBtn)
         self._quickSaveBtn = QPushButton("Save", comboRow)
         self._quickSaveBtn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._quickSaveBtn.clicked.connect(self._onQuickSave)
@@ -52,7 +56,7 @@ class ProfilesPanel(Panel):
         self._layout.addWidget(comboRow)
 
         self._refreshCombo()
-        self._combo.currentTextChanged.connect(self._onSelect)
+        self._combo.currentTextChanged.connect(self._onComboChanged)
 
         self._layout.addWidget(_sep())
 
@@ -94,22 +98,29 @@ class ProfilesPanel(Panel):
         active = self._profileData["active"]
         self._combo.setCurrentText(active if active in names else names[0])
         self._combo.blockSignals(False)
-        self._updateQuickSaveBtn()
+        self._updateButtons()
 
     _refreshCombo = refreshCombo
 
-    def _updateQuickSaveBtn(self):
-        is_default = self._combo.currentText() == prof.DEFAULT_NAME
+    def _updateButtons(self):
+        name       = self._combo.currentText()
+        is_default = name == prof.DEFAULT_NAME
+        is_active  = name == self._profileData.get("active", "")
         self._quickSaveBtn.setEnabled(not is_default)
+        self._applyBtn.setEnabled(bool(name) and not is_active)
 
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
 
-    def _onSelect(self, name: str):
+    def _onComboChanged(self, name: str):
+        self._updateButtons()
+
+    def _onApplyClick(self):
+        name = self._combo.currentText()
         if name:
             self._onLoad(name)
-        self._updateQuickSaveBtn()
+            self._updateButtons()
 
     def _onQuickSave(self):
         name = self._combo.currentText()

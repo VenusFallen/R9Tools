@@ -5,14 +5,16 @@ Implemented as two coordinated windows:
   PanelWindow    — PANEL_W-wide content area, hides when collapsed
 """
 from PySide6.QtCore import Qt, QTimer, Slot
+from PySide6.QtGui import QColor, QPainterPath, QRegion
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QPushButton,
+    QApplication, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QPushButton,
     QStackedWidget, QVBoxLayout, QWidget,
 )
 
 import profiles as prof
 import theme
-from theme import PANEL_W, TOPBAR_H
+from theme import (PANEL_W, TOPBAR_H, TOPBAR_MARGIN_TOP, TOPBAR_MARGIN_SIDE,
+                   TOPBAR_MARGIN_BOTTOM, TOPBAR_RADIUS, SHADOW_SIZE)
 
 from panels.recoil    import RecoilPanel
 from panels.crosshair import CrosshairPanel
@@ -46,32 +48,31 @@ class _TopBarWindow(QWidget):
         self._panelWin  = panelWin
         self._activeTab = _TAB_RECOIL
 
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowFlags(_WIN_FLAGS)
 
         screenW = QApplication.primaryScreen().geometry().width()
-        self.setFixedSize(screenW, TOPBAR_H + 2)
+        totalH  = TOPBAR_MARGIN_TOP + TOPBAR_H + TOPBAR_MARGIN_BOTTOM
+        self.setFixedSize(screenW, totalH)
         self.move(0, 0)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(
+            TOPBAR_MARGIN_SIDE, TOPBAR_MARGIN_TOP,
+            TOPBAR_MARGIN_SIDE, TOPBAR_MARGIN_BOTTOM)
         root.setSpacing(0)
 
         self._barFrame = QFrame()
+        self._barFrame.setObjectName("topBar")
         self._barFrame.setFixedHeight(TOPBAR_H)
-        self._barFrame.setStyleSheet(f"background-color: {theme.BAR_BG};")
         self._barLayout = QHBoxLayout(self._barFrame)
-        self._barLayout.setContentsMargins(0, 0, 0, 0)
+        self._barLayout.setContentsMargins(4, 0, 4, 0)
         self._barLayout.setSpacing(0)
         root.addWidget(self._barFrame)
 
-        self._borderFrame = QFrame()
-        self._borderFrame.setFixedHeight(2)
-        self._borderFrame.setStyleSheet(f"background-color: {theme.BORDER_CLR};")
-        root.addWidget(self._borderFrame)
-
         self._tabButtons: dict[int, QPushButton] = {}
         self._build()
-        self.setStyleSheet(theme.makeQSS())
+        self._applyBarStyle()
 
     def _build(self):
         for label, index in [("RECOIL",    _TAB_RECOIL),
@@ -85,7 +86,8 @@ class _TopBarWindow(QWidget):
                               ("SETTINGS", _TAB_SETTINGS)]:
             self._barLayout.addWidget(self._makeTabButton(label, index))
 
-        self._quitBtn = QPushButton("QUIT")
+        self._quitBtn = QPushButton("✕")
+        self._quitBtn.setFixedWidth(32)
         self._quitBtn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._quitBtn.clicked.connect(QApplication.instance().quit)
         self._barLayout.addWidget(self._quitBtn)
@@ -108,42 +110,70 @@ class _TopBarWindow(QWidget):
             self._styleTabButton(btn, i == index)
 
     def flashBorder(self, color: str):
-        self._borderFrame.setStyleSheet(f"background-color: {color};")
+        self._barFrame.setStyleSheet(
+            f"QFrame#topBar {{ background-color: {theme.BAR_BG};"
+            f" border-radius: {TOPBAR_RADIUS}px; border: 1.5px solid {color}; }}"
+            f"QFrame#topBar * {{ background-color: transparent; }}")
         QTimer.singleShot(
             theme.FLASH_MS,
-            lambda: self._borderFrame.setStyleSheet(
-                f"background-color: {theme.BORDER_CLR};"))
+            lambda: self._applyBarStyle())
 
     def applyTheme(self):
-        self.setStyleSheet(theme.makeQSS())
-        self._barFrame.setStyleSheet(f"background-color: {theme.BAR_BG};")
-        self._borderFrame.setStyleSheet(f"background-color: {theme.BORDER_CLR};")
+        self._applyBarStyle()
         self._styleQuitButton()
         for i, btn in self._tabButtons.items():
             self._styleTabButton(btn, i == self._activeTab)
+
+    def _applyBarStyle(self):
+        self._barFrame.setStyleSheet(
+            f"QFrame#topBar {{ background-color: {theme.BAR_BG};"
+            f" border-radius: {TOPBAR_RADIUS}px; }}"
+            f"QFrame#topBar * {{ background-color: transparent; }}")
 
     # ------------------------------------------------------------------
     # Button styling
     # ------------------------------------------------------------------
 
     def _styleTabButton(self, btn: QPushButton, active: bool):
+        font = "bold 9pt 'Segoe UI Variable Display', 'Segoe UI'"
         if active:
             btn.setStyleSheet(
-                f"QPushButton {{ background-color: {theme.BTN_BG};"
-                f" color: {theme.ACCENT}; border: none;"
-                f" padding: 3px 12px; font: bold 9pt 'Segoe UI'; }}")
+                f"QPushButton {{ background-color: transparent; color: {theme.BTN_FG};"
+                f" border: none; border-bottom: 2px solid {theme.ACCENT};"
+                f" padding: 3px 12px 1px 12px; font: {font}; }}")
         else:
             btn.setStyleSheet(
-                f"QPushButton {{ background-color: {theme.BAR_BG};"
-                f" color: {theme.DIM}; border: none;"
-                f" padding: 3px 12px; font: bold 9pt 'Segoe UI'; }}"
-                f"QPushButton:hover {{ background-color: {theme.TAB_HOVER_BG}; }}")
+                f"QPushButton {{ background-color: transparent; color: {theme.DIM};"
+                f" border: none; border-bottom: 2px solid transparent;"
+                f" padding: 3px 12px 1px 12px; font: {font}; }}"
+                f"QPushButton:hover {{ color: {theme.LABEL_FG};"
+                f" border-bottom-color: rgba(74,158,255,100); }}")
 
     def _styleQuitButton(self):
+        font = "bold 9pt 'Segoe UI Variable Display', 'Segoe UI'"
         self._quitBtn.setStyleSheet(
-            f"QPushButton {{ background-color: {theme.BAR_BG}; color: #ff6666;"
-            f" border: none; padding: 3px 12px; font: bold 9pt 'Segoe UI'; }}"
-            f"QPushButton:hover {{ background-color: {theme.TAB_HOVER_BG}; }}")
+            f"QPushButton {{ background-color: transparent; color: #ff6666;"
+            f" border: none; border-bottom: 2px solid transparent;"
+            f" padding: 3px 6px 1px 6px; font: {font}; }}"
+            f"QPushButton:hover {{ color: #ff9999;"
+            f" border-bottom-color: rgba(255,102,102,100); }}")
+
+
+# ---------------------------------------------------------------------------
+# Self-masking rounded content frame
+# ---------------------------------------------------------------------------
+
+class _RoundedFrame(QFrame):
+    """QFrame that re-clips itself to a rounded rect on every resize.
+    This handles both normal layout changes and DPI-scaling geometry overrides."""
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        w, h = self.width(), self.height()
+        if w > 0 and h > 0:
+            path = QPainterPath()
+            path.addRoundedRect(0, 0, w, h, TOPBAR_RADIUS, TOPBAR_RADIUS)
+            self.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
 
 # ---------------------------------------------------------------------------
@@ -161,15 +191,15 @@ class PanelWindow(QWidget):
         self._activeTab        = profileData.get("last_tab", _TAB_RECOIL)
         self._panelCollapsed   = False
 
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowFlags(_WIN_FLAGS)
-        self.setFixedWidth(PANEL_W)
 
         # Topbar lives in its own full-width window
         self._topBarWin = _TopBarWindow(self)
 
         self._buildLayout()
         self._buildPanels()
-        self.setStyleSheet(theme.makeQSS())
+        self._applyThemeQSS()
         self._selectTab(self._activeTab)
 
     # ------------------------------------------------------------------
@@ -178,10 +208,25 @@ class PanelWindow(QWidget):
 
     def _buildLayout(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(0, 0, SHADOW_SIZE, SHADOW_SIZE)
         root.setSpacing(0)
+
+        self._contentFrame = _RoundedFrame()
+        self._contentFrame.setObjectName("panelContent")
+        self._contentFrame.setFixedWidth(PANEL_W)
+        root.addWidget(self._contentFrame)
+
+        shadow = QGraphicsDropShadowEffect(self._contentFrame)
+        shadow.setBlurRadius(14)
+        shadow.setOffset(2, 3)
+        shadow.setColor(QColor(0, 0, 0, 160))
+        self._contentFrame.setGraphicsEffect(shadow)
+
+        innerLayout = QVBoxLayout(self._contentFrame)
+        innerLayout.setContentsMargins(0, 0, 0, 0)
+        innerLayout.setSpacing(0)
         self._stack = QStackedWidget()
-        root.addWidget(self._stack)
+        innerLayout.addWidget(self._stack)
 
     # ------------------------------------------------------------------
     # Panels
@@ -257,10 +302,11 @@ class PanelWindow(QWidget):
 
     def _reposition(self):
         screen = QApplication.primaryScreen().geometry()
+        y = TOPBAR_MARGIN_TOP + TOPBAR_H + TOPBAR_MARGIN_BOTTOM
         if self._panels[self._activeTab].right_anchor:
-            self.move(screen.width() - PANEL_W, TOPBAR_H + 2)
+            self.move(screen.width() - TOPBAR_MARGIN_SIDE - PANEL_W, y)
         else:
-            self.move(0, TOPBAR_H + 2)
+            self.move(TOPBAR_MARGIN_SIDE, y)
         self.adjustSize()
 
     # ------------------------------------------------------------------
@@ -271,8 +317,15 @@ class PanelWindow(QWidget):
         theme.setTheme(name)
         self._applyTheme()
 
+    def _applyThemeQSS(self):
+        self.setStyleSheet(
+            theme.makeQSS()
+            + f"PanelWindow {{ background-color: transparent; }}"
+            + f"QFrame#panelContent {{ background-color: {theme.PANEL_BG};"
+            f" border-radius: {TOPBAR_RADIUS}px; }}")
+
     def _applyTheme(self):
-        self.setStyleSheet(theme.makeQSS())
+        self._applyThemeQSS()
         self._topBarWin.applyTheme()
         for w in self.findChildren(theme.ToggleSwitch):
             w.update()

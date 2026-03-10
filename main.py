@@ -4,6 +4,7 @@ Run as administrator (required for Interception driver).
 """
 import sys
 
+from PySide6.QtCore import qInstallMessageHandler, QtMsgType
 from PySide6.QtWidgets import QApplication
 
 import profiles as prof
@@ -13,7 +14,19 @@ from overlay_window import OverlayWindow
 from panel_window  import PanelWindow
 
 
+def _qt_message_filter(msg_type, _context, msg):
+    if "Unable to set geometry" in msg:
+        return
+    if msg_type == QtMsgType.QtWarningMsg:
+        print(f"Qt warning: {msg}", file=sys.stderr)
+    elif msg_type == QtMsgType.QtCriticalMsg:
+        print(f"Qt critical: {msg}", file=sys.stderr)
+    elif msg_type == QtMsgType.QtFatalMsg:
+        print(f"Qt fatal: {msg}", file=sys.stderr)
+
+
 def main():
+    qInstallMessageHandler(_qt_message_filter)
     app = QApplication(sys.argv)
 
     profileData = prof.load()
