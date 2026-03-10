@@ -102,7 +102,7 @@ The overlay requires your game to run in **Borderless Windowed** mode. Exclusive
 
 ### Option A — Installer (recommended)
 
-Download `R9Tools_Setup.exe` from the [Releases](https://github.com/VenusFallen/R9Tools/releases) page and run it. The installer will:
+Download `R9Tools_vX.X.X.zip` from the [Releases](https://github.com/VenusFallen/R9Tools/releases) page, extract it, and run `R9Tools_Setup.exe`. The installer will:
 
 - Install R9Tools to `Program Files\R9Tools`
 - Install the Interception kernel driver automatically
