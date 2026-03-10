@@ -11,6 +11,7 @@ A personal gaming accessibility toolkit for Windows. Built with hardware-level i
 Applies a configurable downward mouse pull while a trigger key combo is held, compensating for weapon recoil.
 
 - Strength is adjustable from 1–30 via the overlay panel or in-game hotkeys
+- **Humanize** adds subtle randomized variation to each pull to reduce pattern detection
 - Toggle on/off at any time without opening the overlay
 - Trigger key and all hotkeys are rebindable from the Settings tab
 - When a **Window Filter** is set in Settings, recoil compensation only fires while that window has focus
@@ -43,7 +44,9 @@ When a **Window Filter** is set in Settings, remapping only fires while that win
 
 Save, load, and delete named configurations. Settings and mappings are stored per-profile, making it easy to maintain separate setups per game.
 
-- A protected **Default** profile is always available and cannot be deleted
+- Select a profile from the dropdown, then click **Apply** to load it
+- Use **Save** next to the dropdown to overwrite the current profile, or enter a new name and click **Save** to create one
+- A protected **Default** profile is always available and cannot be deleted or overwritten
 - Loading a profile always starts with recoil, crosshair, and remapper disabled
 - The top bar flashes to confirm saves (green), loads (blue), and deletes (red)
 
@@ -126,7 +129,7 @@ Reboot after installation, then launch R9Tools as **Administrator**.
 3. Install Python dependencies:
 
 ```bash
-pip install interception-python psutil pywin32
+pip install PySide6 interception-python psutil pywin32
 ```
 
 1. Run as **administrator**:
