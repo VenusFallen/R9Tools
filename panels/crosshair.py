@@ -154,16 +154,14 @@ class CrosshairPanel(Panel):
         enableRow.pack(fill="x", padx=10, pady=3)
         tk.Label(enableRow, text="Enabled", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
                  font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
-        tk.Checkbutton(enableRow, variable=self._enabledVar, command=self._onToggle,
-                       bg=theme.PANEL_BG, activebackground=theme.PANEL_BG,
-                       selectcolor=theme.BTN_BG, fg="#aaffaa").pack(side="left")
+        theme.ToggleSwitch(enableRow, variable=self._enabledVar,
+                           command=self._onToggle).pack(side="left")
 
-        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
-
-        # Style
-        styleRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
+        # Style + Color card
+        card1 = theme.buildCard(self._frame)
+        styleRow = tk.Frame(card1, bg=theme.CARD_BG)
         styleRow.pack(fill="x", padx=10, pady=3)
-        tk.Label(styleRow, text="Style", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
+        tk.Label(styleRow, text="Style", fg=theme.LABEL_FG, bg=theme.CARD_BG,
                  font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
         self._styleVar = tk.StringVar(value=self._keyToLabel(s["style"]))
         styleBox = ttk.Combobox(styleRow, textvariable=self._styleVar,
@@ -172,10 +170,9 @@ class CrosshairPanel(Panel):
         styleBox.pack(side="left")
         styleBox.bind("<<ComboboxSelected>>", lambda _: self._onStyleChange())
 
-        # Color
-        colorRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
+        colorRow = tk.Frame(card1, bg=theme.CARD_BG)
         colorRow.pack(fill="x", padx=10, pady=3)
-        tk.Label(colorRow, text="Color", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
+        tk.Label(colorRow, text="Color", fg=theme.LABEL_FG, bg=theme.CARD_BG,
                  font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
         self._colorVar = tk.StringVar(value=s["color"].capitalize())
         colorBox = ttk.Combobox(colorRow, textvariable=self._colorVar,
@@ -184,24 +181,17 @@ class CrosshairPanel(Panel):
         colorBox.pack(side="left")
         colorBox.bind("<<ComboboxSelected>>", lambda _: self._onColorChange())
 
-        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
-
-        # Size
+        # Size parameters card
+        card2 = theme.buildCard(self._frame)
         self._sizeVar = tk.IntVar(value=s["size"])
-        theme.buildPlusMinusRow(self._frame, "Size", self._sizeVar, 1, 30, self._onParamChange)
-
-        # Thickness
+        theme.buildPlusMinusRow(card2, "Size", self._sizeVar, 1, 30, self._onParamChange)
         self._thickVar = tk.IntVar(value=s["thickness"])
-        theme.buildPlusMinusRow(self._frame, "Thickness", self._thickVar, 1, 10, self._onParamChange)
-
-        # Gap
+        theme.buildPlusMinusRow(card2, "Thickness", self._thickVar, 1, 10, self._onParamChange)
         self._gapVar = tk.IntVar(value=s["gap"])
-        theme.buildPlusMinusRow(self._frame, "Gap", self._gapVar, 0, 20, self._onParamChange)
-
-        # Outline Size (0 = no outline)
+        theme.buildPlusMinusRow(card2, "Gap", self._gapVar, 0, 20, self._onParamChange)
         self._outlineSizeVar = tk.IntVar(value=s["outline_size"])
-        theme.buildPlusMinusRow(self._frame, "Outline Size", self._outlineSizeVar, 0, 5, self._onParamChange)
-        tk.Frame(self._frame, bg=theme.PANEL_BG, height=7).pack()
+        theme.buildPlusMinusRow(card2, "Outline Size", self._outlineSizeVar, 0, 5, self._onParamChange)
+        tk.Frame(self._frame, bg=theme.PANEL_BG, height=4).pack()
 
     # ------------------------------------------------------------------
     # Reload (called on profile load)

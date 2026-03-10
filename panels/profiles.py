@@ -43,6 +43,7 @@ class ProfilesPanel(Panel):
                                        font=("Segoe UI", 9), padx=6,
                                        cursor="hand2")
         self._quickSaveBtn.pack(side="left")
+        theme.addHoverEffect(self._quickSaveBtn)
         self._updateQuickSaveBtn()
 
         ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
@@ -61,17 +62,19 @@ class ProfilesPanel(Panel):
                  relief="flat", insertbackground=theme.BTN_FG,
                  width=14).pack(side="left", padx=(0, 4))
 
-        tk.Button(actionRow, text="Save",
-                  command=self._onSaveClick,
-                  bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
-                  font=("Segoe UI", 9), padx=6,
-                  cursor="hand2").pack(side="left", padx=(0, 2))
+        save_btn = tk.Button(actionRow, text="Save",
+                             command=self._onSaveClick,
+                             bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
+                             font=("Segoe UI", 9), padx=6, cursor="hand2")
+        save_btn.pack(side="left", padx=(0, 2))
+        theme.addHoverEffect(save_btn)
 
-        tk.Button(actionRow, text="Delete",
-                  command=self._onDeleteClick,
-                  bg=theme.BTN_BG, fg="#ff6666", relief="flat",
-                  font=("Segoe UI", 9), padx=6,
-                  cursor="hand2").pack(side="left")
+        del_btn = tk.Button(actionRow, text="Delete",
+                            command=self._onDeleteClick,
+                            bg=theme.BTN_BG, fg="#ff6666", relief="flat",
+                            font=("Segoe UI", 9), padx=6, cursor="hand2")
+        del_btn.pack(side="left")
+        theme.addHoverEffect(del_btn)
 
     # ------------------------------------------------------------------
     # Combo management

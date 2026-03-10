@@ -55,6 +55,8 @@ Program-wide configuration accessible from the right side of the top bar.
 
 **Window Filter** — select a process name (e.g. `game.exe`) from the running process list. When set, Recoil Compensation, the Crosshair, and the Button Remapper will only be active while that window has focus. Refresh the list with the ↻ button. Leave blank to have all modules act globally.
 
+**Color Theme** — switch between Dark and Light themes. The selection is saved per-profile.
+
 **Hotkeys** — rebind all global hotkeys from a single panel:
 
 | Hotkey | Default |
@@ -96,16 +98,28 @@ The overlay requires your game to run in **Borderless Windowed** mode. Exclusive
 
 ---
 
-## Requirements
+## Installation
+
+### Option A — Installer (recommended)
+
+Download `R9Tools_vX.X.X.zip` from the [Releases](https://github.com/VenusFallen/R9Tools/releases) page, extract it, and run `R9Tools_Setup.exe`. The installer will:
+
+- Install R9Tools to `Program Files\R9Tools`
+- Install the Interception kernel driver automatically
+- Create a Start Menu shortcut
+
+Reboot after installation, then launch R9Tools as **Administrator**.
+
+### Option B — Run from source
+
+**Requirements:**
 
 - Windows 10 or 11
 - Python 3.10+
 - [Interception driver](https://github.com/oblitum/Interception) installed (run installer once, then reboot)
 - Run as **Administrator** (required by the Interception driver)
 
----
-
-## Setup
+**Steps:**
 
 1. Install the Interception driver and reboot
 2. Clone or download the repository
@@ -129,4 +143,4 @@ python main.py
 
 - **`psutil` and `pywin32`** are required for the Window Filter feature (used by both Crosshair and Button Remapper). Both modules will still function without them, but window-specific filtering will be unavailable.
 - **Antivirus false positives** — Windows Defender and other AV tools may flag this application due to the Interception kernel driver. The driver operates at the kernel level for input filtering only; this is a known false positive for Interception-based tools. You can submit the driver for analysis at [Microsoft's security portal](https://www.microsoft.com/en-us/wdsi/filesubmission) if needed.
-- **Source-only distribution** is intentional. No pre-built executable is provided at this time.
+- **Antivirus false positives** may also flag the pre-built EXE for the same reason as the driver.

@@ -25,7 +25,7 @@ class Overlay:
         self._onSettingsChanged = onSettingsChanged
         self._visible           = False
         self._panelCollapsed    = False
-        self._activeTab         = profileData.get("last_tab", _TAB_SETTINGS)
+        self._activeTab         = profileData.get("last_tab", _TAB_RECOIL)
         self._buildWindow()
 
     # ------------------------------------------------------------------
@@ -68,18 +68,21 @@ class Overlay:
     def _buildTopBar(self):
         self._topBar       = tk.Frame(self._root, bg=theme.BAR_BG)
         self._topBarBorder = tk.Frame(self._root, bg=theme.BORDER_CLR)
+        self._tabUnderline = tk.Frame(self._topBar, bg=theme.ACCENT, height=2)
         self._tabButtons: dict[int, tk.Button] = {}
 
         self._addTab("RECOIL",    _TAB_RECOIL,    side="left")
         self._addTab("CROSSHAIR", _TAB_CROSSHAIR, side="left")
         self._addTab("REMAPPER",  _TAB_REMAPPER,  side="left")
 
-        tk.Button(self._topBar, text="QUIT",
-                  command=self._root.destroy,
-                  bg=theme.BAR_BG, fg="#ff6666", relief="flat",
-                  font=("Segoe UI", 9, "bold"), padx=12,
-                  activebackground=theme.BTN_BG, activeforeground="#ff6666",
-                  cursor="hand2").pack(side="right")
+        quit_btn = tk.Button(self._topBar, text="QUIT",
+                             command=self._root.destroy,
+                             bg=theme.BAR_BG, fg="#ff6666", relief="flat",
+                             font=("Segoe UI", 9, "bold"), padx=12,
+                             activebackground=theme.BTN_BG, activeforeground="#ff6666",
+                             cursor="hand2")
+        quit_btn.pack(side="right")
+        theme.addTabHoverEffect(quit_btn)
         self._addTab("SETTINGS",  _TAB_SETTINGS,  side="right")
         self._addTab("PROFILES",  _TAB_PROFILES,  side="right")
 
@@ -96,6 +99,7 @@ class Overlay:
                         activebackground=theme.BTN_BG, activeforeground=theme.ACCENT,
                         cursor="hand2")
         btn.pack(side=side)
+        theme.addTabHoverEffect(btn)
         self._tabButtons[index] = btn
 
     def _buildPanels(self):
@@ -161,6 +165,15 @@ class Overlay:
                 self._panelCollapsed = False
             self._selectTab(index)
 
+        # Position accent underline under the active tab
+        try:
+            self._root.update_idletasks()
+            btn = self._tabButtons[index]
+            self._tabUnderline.place(x=btn.winfo_x(), y=theme.TOPBAR_H - 2,
+                                     width=btn.winfo_width(), height=2)
+        except Exception:
+            pass
+
     def _shiftTab(self, direction: int):
         indices = sorted(self._panels.keys())
         current = indices.index(self._activeTab)
@@ -170,6 +183,7 @@ class Overlay:
         if not self._visible or self._panelCollapsed:
             return
         self._panelCollapsed = True
+        self._tabUnderline.place_forget()
         for panel in self._panels.values():
             panel.hide()
 
@@ -229,8 +243,9 @@ class Overlay:
     def _hideOverlay(self):
         self._profileData["last_tab"] = self._activeTab
         prof.save(self._profileData)
-        self._visible = False
+        self._visible        = False
         self._panelCollapsed = False
+        self._tabUnderline.place_forget()
         self._topBar.place_forget()
         self._topBarBorder.place_forget()
         for panel in self._panels.values():

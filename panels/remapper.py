@@ -49,11 +49,10 @@ class RemapperPanel(Panel):
         ctrlRow.pack(fill="x", padx=10, pady=(2, 4))
 
         self._enabledVar = tk.BooleanVar(value=False)   # always starts off
-        tk.Checkbutton(ctrlRow, text="Enabled", variable=self._enabledVar,
-                       command=self._onEnabledChange,
-                       bg=theme.PANEL_BG, fg=theme.LABEL_FG, selectcolor=theme.BTN_BG,
-                       activebackground=theme.PANEL_BG, activeforeground=theme.ACCENT,
-                       font=("Segoe UI", 9)).pack(side="left")
+        tk.Label(ctrlRow, text="Enabled", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
+                 font=("Segoe UI", 9)).pack(side="left")
+        theme.ToggleSwitch(ctrlRow, variable=self._enabledVar,
+                           command=self._onEnabledChange).pack(side="left", padx=(6, 0))
 
         # Column headers
         hdrRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
@@ -75,9 +74,11 @@ class RemapperPanel(Panel):
                                       font=("Segoe UI", 9, "italic"))
 
         # Add mapping button
-        tk.Button(self._frame, text="+ Add Mapping", command=self._startAddMapping,
-                  bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
-                  font=("Segoe UI", 9), padx=8, cursor="hand2").pack(anchor="w", padx=10, pady=(6, 8))
+        add_btn = tk.Button(self._frame, text="+ Add Mapping", command=self._startAddMapping,
+                            bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
+                            font=("Segoe UI", 9), padx=8, cursor="hand2")
+        add_btn.pack(anchor="w", padx=10, pady=(6, 8))
+        theme.addHoverEffect(add_btn)
 
         self._refreshMappingRows()
 
@@ -102,6 +103,7 @@ class RemapperPanel(Panel):
                             bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
                             font=("Segoe UI", 9), cursor="hand2")
         fromBtn.pack(side="left")
+        theme.addHoverEffect(fromBtn)
 
         tk.Label(row, text="→", fg=theme.DIM, bg=theme.PANEL_BG,
                  font=("Segoe UI", 9)).pack(side="left", padx=4)
@@ -111,10 +113,13 @@ class RemapperPanel(Panel):
                           bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
                           font=("Segoe UI", 9), cursor="hand2")
         toBtn.pack(side="left")
+        theme.addHoverEffect(toBtn)
 
-        tk.Button(row, text="×", command=lambda m=mapping: self._deleteMapping(m),
-                  bg=theme.BTN_BG, fg="#ff6666", relief="flat",
-                  font=("Segoe UI", 9), padx=4, cursor="hand2").pack(side="right")
+        del_btn = tk.Button(row, text="×", command=lambda m=mapping: self._deleteMapping(m),
+                            bg=theme.BTN_BG, fg="#ff6666", relief="flat",
+                            font=("Segoe UI", 9), padx=4, cursor="hand2")
+        del_btn.pack(side="right")
+        theme.addHoverEffect(del_btn)
 
     # ------------------------------------------------------------------
     # Add / edit / delete
