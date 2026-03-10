@@ -1,5 +1,6 @@
 import threading
 import time
+import random
 import interception
 
 try:
@@ -113,6 +114,7 @@ class RecoilEngine:
         self._remapActive: dict = {}           # sig tuple → to_input dict
         self._kbDevice = None                  # tracked from listen loop for synthesis
         self._msDevice = None                  # tracked from listen loop for synthesis
+        self._xDrift   = 0.0                   # Brownian X drift accumulator
 
         self._applyThread = threading.Thread(target=self._applyLoop, daemon=True)
         self._listenThread = threading.Thread(target=self._listenLoop, daemon=True)
@@ -175,14 +177,45 @@ class RecoilEngine:
     def _applyLoop(self):
         while self._running:
             with self._lock:
-                enabled = self._settings["enabled"]
-                sy = self._settings["strength_y"]
+                enabled  = self._settings["enabled"]
+                sy       = self._settings["strength_y"]
+                humanize = self._settings.get("humanize", False)
                 window_filter = self._fullSettings.get("window_filter", "")
 
             if enabled and self.isActive and self.windowMatchesFilter(window_filter):
-                interception.move_relative(0, sy)
+                if humanize:
+                    self._applyHumanized(sy)
+                else:
+                    interception.move_relative(0, sy)
+                    time.sleep(0.05)
+            else:
+                self._xDrift = 0.0  # reset drift when not actively pulling
+                time.sleep(0.05)
 
-            time.sleep(0.05)
+    def _applyHumanized(self, sy: int):
+        # ~3% chance to skip this tick entirely (simulate human inconsistency)
+        if random.random() < 0.03:
+            time.sleep(random.uniform(0.042, 0.058))
+            return
+
+        # Ornstein-Uhlenbeck X drift: mean-reverting random walk
+        self._xDrift = self._xDrift * 0.75 + random.gauss(0, 0.5)
+        self._xDrift = max(-2.0, min(2.0, self._xDrift))
+        x_move = round(self._xDrift)
+
+        # Split sy into 3 sub-steps with Gaussian noise; last step corrects remainder
+        step1 = max(0, round(random.gauss(sy / 3, sy * 0.07)))
+        step2 = max(0, round(random.gauss(sy / 3, sy * 0.07)))
+        step3 = max(0, sy - step1 - step2)
+
+        step_sleep = random.uniform(0.042, 0.058) / 3
+
+        interception.move_relative(x_move, step1)
+        time.sleep(step_sleep)
+        interception.move_relative(0, step2)
+        time.sleep(step_sleep)
+        interception.move_relative(0, step3)
+        time.sleep(step_sleep)
 
     # ------------------------------------------------------------------
     # Listen loop

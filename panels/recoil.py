@@ -46,6 +46,14 @@ class RecoilPanel(Panel):
         self._syVar = tk.IntVar(value=s["strength_y"])
         theme.buildPlusMinusRow(card, "Pull Strength (px)", self._syVar, 1, 30, self._onSyChange)
 
+        humanizeRow = tk.Frame(card, bg=theme.CARD_BG)
+        humanizeRow.pack(fill="x", padx=10, pady=3)
+        tk.Label(humanizeRow, text="Humanize", fg=theme.LABEL_FG, bg=theme.CARD_BG,
+                 font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
+        self._humanizeVar = tk.BooleanVar(value=s.get("humanize", False))
+        theme.ToggleSwitch(humanizeRow, variable=self._humanizeVar,
+                           command=self._onHumanizeChange).pack(side="left", padx=(6, 0))
+
         kbRow = tk.Frame(card, bg=theme.CARD_BG)
         kbRow.pack(fill="x", padx=10, pady=(3, 6))
         tk.Label(kbRow, text="Trigger:", fg=theme.LABEL_FG, bg=theme.CARD_BG,
@@ -69,6 +77,7 @@ class RecoilPanel(Panel):
         self._settings["recoil"].update(s)
         self._syVar.set(s["strength_y"])
         self._keybindVar.set(theme.comboLabel(s["trigger_keys"]))
+        self._humanizeVar.set(s.get("humanize", False))
 
     # ------------------------------------------------------------------
     # Engine callback
@@ -83,6 +92,10 @@ class RecoilPanel(Panel):
 
     def _onSyChange(self):
         self._settings["recoil"]["strength_y"] = self._syVar.get()
+        self._onSettingsChanged(self._settings)
+
+    def _onHumanizeChange(self):
+        self._settings["recoil"]["humanize"] = self._humanizeVar.get()
         self._onSettingsChanged(self._settings)
 
     # ------------------------------------------------------------------
