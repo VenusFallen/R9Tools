@@ -54,6 +54,7 @@ def load() -> dict:
 
     # Ensure Default always exists and is complete
     data.setdefault("profiles", {})
+    data.setdefault("last_tab", 4)   # 4 = Settings tab; shown on first launch
     if DEFAULT_NAME not in data["profiles"]:
         data["profiles"][DEFAULT_NAME] = copy.deepcopy(_DEFAULT_SETTINGS)
 
@@ -119,6 +120,7 @@ def saveProfile(data: dict, name: str, settings: dict) -> bool:
     if not name or name == DEFAULT_NAME:
         return False
     data["profiles"][name] = copy.deepcopy(settings)
+    data["active"] = name
     save(data)
     return True
 

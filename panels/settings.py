@@ -205,7 +205,12 @@ class SettingsPanel(Panel):
 
     def reload(self, settings: dict):
         self._settings["window_filter"] = settings.get("window_filter", "")
-        self._windowVar.set(self._settings["window_filter"])
+        filter_val = self._settings["window_filter"]
+        if filter_val:
+            current = list(self._windowCombo["values"])
+            if filter_val not in current:
+                self._windowCombo["values"] = ["", filter_val] + [v for v in current if v]
+        self._windowVar.set(filter_val)
 
         new_theme = settings.get("theme", "Dark")
         self._themeVar.set(new_theme)

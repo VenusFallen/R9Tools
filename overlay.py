@@ -24,8 +24,8 @@ class Overlay:
         self._engine            = engine
         self._onSettingsChanged = onSettingsChanged
         self._visible           = False
-        self._panelVisible      = False
-        self._activeTab         = _TAB_RECOIL
+        self._panelCollapsed    = False
+        self._activeTab         = profileData.get("last_tab", _TAB_RECOIL)
         self._buildWindow()
 
     # ------------------------------------------------------------------
@@ -88,12 +88,12 @@ class Overlay:
 
         self._root.bind("<Left>",  lambda _: self._shiftTab(-1))
         self._root.bind("<Right>", lambda _: self._shiftTab(1))
-        self._root.bind("<Up>",    lambda _: self._closePanel())
-        self._root.bind("<Down>",  lambda _: self._openPanel())
+        self._root.bind("<Up>",    lambda _: self._collapsePanel())
+        self._root.bind("<Down>",  lambda _: self._expandPanel())
 
     def _addTab(self, label: str, index: int, side: str = "left"):
         btn = tk.Button(self._topBar, text=label,
-                        command=lambda i=index: self._selectTab(i),
+                        command=lambda i=index: self._toggleTab(i),
                         bg=theme.BAR_BG, fg=theme.DIM, relief="flat",
                         font=("Segoe UI", 9, "bold"), padx=12,
                         activebackground=theme.BTN_BG, activeforeground=theme.ACCENT,
@@ -106,7 +106,7 @@ class Overlay:
         self._recoilPanel = RecoilPanel(
             self._root, self._settings, self._engine, self._onSettingsChanged)
         self._crosshairPanel = CrosshairPanel(
-            self._root, self._settings, self._onSettingsChanged)
+            self._root, self._settings, self._engine, self._onSettingsChanged)
         self._remapperPanel = RemapperPanel(
             self._root, self._settings, self._onSettingsChanged)
         self._profilesPanel = ProfilesPanel(
@@ -126,7 +126,7 @@ class Overlay:
             _TAB_PROFILES:  self._profilesPanel,
             _TAB_SETTINGS:  self._settingsPanel,
         }
-        self._tabButtons[_TAB_RECOIL].config(fg=theme.ACCENT, bg=theme.BTN_BG)
+        self._tabButtons[self._activeTab].config(fg=theme.ACCENT, bg=theme.BTN_BG)
 
     def _buildStrengthIndicator(self, sw: int, sh: int):
         W, H = 35, 24
@@ -142,26 +142,28 @@ class Overlay:
         self._siCy     = H // 2
 
     def _selectTab(self, index: int):
-        # Clicking the already-active tab while the panel is open closes it
-        if index == self._activeTab and self._panelVisible:
-            self._panelVisible = False
-            for panel in self._panels.values():
-                panel.hide()
-            for btn in self._tabButtons.values():
-                btn.config(fg=theme.DIM, bg=theme.BAR_BG)
-            self._tabUnderline.place_forget()
-            return
-
-        self._activeTab    = index
-        self._panelVisible = True
+        self._activeTab = index
         for i, btn in self._tabButtons.items():
             btn.config(fg=theme.ACCENT if i == index else theme.DIM,
                        bg=theme.BTN_BG if i == index else theme.BAR_BG)
-        for i, panel in self._panels.items():
-            if i == index:
-                panel.show()
+        if not self._panelCollapsed:
+            for i, panel in self._panels.items():
+                if i == index:
+                    panel.show()
+                else:
+                    panel.hide()
+
+    def _toggleTab(self, index: int):
+        """Called by tab button clicks. Collapses panel if already on active tab."""
+        if index == self._activeTab:
+            if self._panelCollapsed:
+                self._expandPanel()
             else:
-                panel.hide()
+                self._collapsePanel()
+        else:
+            if self._panelCollapsed:
+                self._panelCollapsed = False
+            self._selectTab(index)
 
         # Position accent underline under the active tab
         try:
@@ -177,13 +179,19 @@ class Overlay:
         current = indices.index(self._activeTab)
         self._selectTab(indices[(current + direction) % len(indices)])
 
-    def _closePanel(self):
-        if self._panelVisible:
-            self._selectTab(self._activeTab)  # triggers toggle-off
+    def _collapsePanel(self):
+        if not self._visible or self._panelCollapsed:
+            return
+        self._panelCollapsed = True
+        self._tabUnderline.place_forget()
+        for panel in self._panels.values():
+            panel.hide()
 
-    def _openPanel(self):
-        if not self._panelVisible:
-            self._selectTab(self._activeTab)  # triggers show
+    def _expandPanel(self):
+        if not self._visible or not self._panelCollapsed:
+            return
+        self._panelCollapsed = False
+        self._selectTab(self._activeTab)
 
     # ------------------------------------------------------------------
     # Theme rebuild
@@ -200,6 +208,7 @@ class Overlay:
         # Destroy topbar and all panels
         self._topBar.destroy()
         self._topBarBorder.destroy()
+        self._crosshairPanel._canvas.destroy()
         for panel in self._panels.values():
             panel._border.destroy()
 
@@ -224,14 +233,18 @@ class Overlay:
         if self._visible:
             return
         self._visible = True
+        self._panelCollapsed = False
         self._topBar.place(x=0, y=0, relwidth=1.0, height=theme.TOPBAR_H)
         self._topBarBorder.place(x=0, y=theme.TOPBAR_H, relwidth=1.0, height=2)
         self._selectTab(self._activeTab)
-        self._root.focus_force()
+        self._root.lift()
+        self._root.after(50, self._root.focus_force)
 
     def _hideOverlay(self):
-        self._visible      = False
-        self._panelVisible = False
+        self._profileData["last_tab"] = self._activeTab
+        prof.save(self._profileData)
+        self._visible        = False
+        self._panelCollapsed = False
         self._tabUnderline.place_forget()
         self._topBar.place_forget()
         self._topBarBorder.place_forget()
@@ -267,9 +280,9 @@ class Overlay:
         if settings is None:
             return
         old_theme = self._settings.get("theme", "Dark")
+        self._engine.updateSettings(settings)
         for key in settings:
             self._settings[key] = settings[key]
-        self._engine.updateSettings(self._settings)
         new_theme = self._settings.get("theme", "Dark")
 
         if new_theme != old_theme:
@@ -300,9 +313,9 @@ class Overlay:
                 settings = prof.loadProfile(self._profileData, prof.DEFAULT_NAME)
                 if settings:
                     old_theme = self._settings.get("theme", "Dark")
+                    self._engine.updateSettings(settings)
                     for key in settings:
                         self._settings[key] = settings[key]
-                    self._engine.updateSettings(self._settings)
                     new_theme = self._settings.get("theme", "Dark")
                     if new_theme != old_theme:
                         theme.setTheme(new_theme)
