@@ -1,5 +1,5 @@
-import tkinter as tk
-from tkinter import ttk
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton
 
 import theme
 from panels.base import Panel
@@ -12,9 +12,10 @@ except ImportError:
 
 
 class SettingsPanel(Panel):
-    def __init__(self, root: tk.Tk, settings: dict, onSettingsChanged,
+
+    def __init__(self, parent, settings: dict, onSettingsChanged,
                  onCapture=None, onThemeChanged=None):
-        super().__init__(root, right_anchor=True)
+        super().__init__(parent, right_anchor=True)
         self._settings          = settings
         self._onSettingsChanged = onSettingsChanged
         self._onCapture         = onCapture
@@ -26,157 +27,208 @@ class SettingsPanel(Panel):
     # ------------------------------------------------------------------
 
     def _build(self):
-        tk.Label(self._frame, text="Settings",
-                 fg=theme.ACCENT, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
+        title = QLabel("Settings")
+        title.setStyleSheet(
+            f"color: {theme.ACCENT}; font: bold 10pt 'Segoe UI';"
+            f" padding: 8px 10px 2px 10px;")
+        self._layout.addWidget(title)
 
         # ---- Window Filter ----
-        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
-        tk.Label(self._frame, text="Window Filter",
-                 fg=theme.DIM, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=12, pady=(2, 2))
-        tk.Label(self._frame,
-                 text="Restrict active modules to the selected process.",
-                 fg=theme.LABEL_FG, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 8),
-                 wraplength=220, justify="left").pack(anchor="w", padx=12)
+        self._layout.addWidget(_sep())
+        wfLbl = QLabel("Window Filter")
+        wfLbl.setStyleSheet(
+            f"color: {theme.DIM}; font: bold 8pt 'Segoe UI'; padding: 2px 12px;")
+        self._layout.addWidget(wfLbl)
+        descLbl = QLabel(
+            "Restrict active modules to the selected process.")
+        descLbl.setStyleSheet(f"color: {theme.LABEL_FG}; padding: 0px 12px 4px 12px;")
+        descLbl.setWordWrap(True)
+        self._layout.addWidget(descLbl)
 
-        filterCard = theme.buildCard(self._frame)
-        filterRow = tk.Frame(filterCard, bg=theme.CARD_BG)
-        filterRow.pack(fill="x", padx=10, pady=6)
+        filterCard = theme.buildCard(self)
+        filterRow = QFrame(filterCard)
+        fl = QHBoxLayout(filterRow)
+        fl.setContentsMargins(10, 6, 10, 6)
+        fl.setSpacing(4)
+        self._windowCombo = QComboBox(filterRow)
+        self._windowCombo.setMinimumWidth(150)
+        self._windowCombo.setEditable(False)
+        fl.addWidget(self._windowCombo)
+        refreshBtn = QPushButton("↻", filterRow)
+        refreshBtn.setFixedWidth(28)
+        refreshBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        refreshBtn.clicked.connect(self._refreshProcesses)
+        fl.addWidget(refreshBtn)
+        fl.addStretch()
+        filterCard.layout().addWidget(filterRow)
 
-        self._windowVar = tk.StringVar(value=self._settings.get("window_filter", ""))
-        self._windowCombo = ttk.Combobox(filterRow, textvariable=self._windowVar,
-                                         width=20, state="readonly",
-                                         font=("Segoe UI", 9))
-        self._windowCombo.pack(side="left")
-        self._windowCombo.bind("<<ComboboxSelected>>", self._onWindowChange)
-
-        refresh_btn = tk.Button(filterRow, text="↻", command=self._refreshProcesses,
-                                bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
-                                font=("Segoe UI", 9), padx=4, cursor="hand2")
-        refresh_btn.pack(side="left", padx=(4, 0))
-        theme.addHoverEffect(refresh_btn)
+        self._refreshProcesses()
+        self._windowCombo.currentTextChanged.connect(self._onWindowChange)
 
         # ---- Theme ----
-        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
-        tk.Label(self._frame, text="Theme",
-                 fg=theme.DIM, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=12, pady=(2, 2))
+        self._layout.addWidget(_sep())
+        themeLbl = QLabel("Theme")
+        themeLbl.setStyleSheet(
+            f"color: {theme.DIM}; font: bold 8pt 'Segoe UI'; padding: 2px 12px;")
+        self._layout.addWidget(themeLbl)
 
-        themeCard = theme.buildCard(self._frame)
-        themeRow = tk.Frame(themeCard, bg=theme.CARD_BG)
-        themeRow.pack(fill="x", padx=10, pady=(4, 6))
-        tk.Label(themeRow, text="Color Theme:", fg=theme.LABEL_FG, bg=theme.CARD_BG,
-                 font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
-        self._themeVar = tk.StringVar(value=self._settings.get("theme", "Dark"))
-        self._themeBtns = {}
+        themeCard = theme.buildCard(self)
+        themeRow = QFrame(themeCard)
+        tl = QHBoxLayout(themeRow)
+        tl.setContentsMargins(10, 4, 10, 6)
+        tl.setSpacing(4)
+        colorLbl = QLabel("Color Theme:", themeRow)
+        colorLbl.setFixedWidth(100)
+        tl.addWidget(colorLbl)
+        self._themeBtns: dict[str, QPushButton] = {}
+        current_theme = self._settings.get("theme", "Dark")
         for name in theme.THEME_NAMES:
-            active = (name == self._themeVar.get())
-            btn = tk.Button(themeRow, text=name.upper(),
-                            command=lambda n=name: self._selectTheme(n),
-                            bg=theme.BTN_BG if active else theme.CARD_BG,
-                            fg=theme.ACCENT if active else theme.DIM,
-                            relief="flat", font=("Segoe UI", 9), padx=8, cursor="hand2")
-            btn.pack(side="left", padx=(0, 2))
-            theme.addHoverEffect(btn)
+            active = (name == current_theme)
+            btn = QPushButton(name.upper(), themeRow)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _, n=name: self._selectTheme(n))
+            self._applyThemeButtonStyle(btn, active)
+            tl.addWidget(btn)
             self._themeBtns[name] = btn
+        tl.addStretch()
+        themeCard.layout().addWidget(themeRow)
 
-        # ---- Hotkeys ----
-        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
-        tk.Label(self._frame, text="Hotkeys",
-                 fg=theme.ACCENT, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(2, 2))
+        # ---- Hotkeys header ----
+        self._layout.addWidget(_sep())
+        hkTitle = QLabel("Hotkeys")
+        hkTitle.setStyleSheet(
+            f"color: {theme.ACCENT}; font: bold 10pt 'Segoe UI';"
+            f" padding: 2px 10px 2px 10px;")
+        self._layout.addWidget(hkTitle)
 
-        # ---- Hotkeys — General ----
-        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
-        tk.Label(self._frame, text="General",
-                 fg=theme.DIM, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=12, pady=(2, 4))
+        # ---- General hotkeys ----
+        self._layout.addWidget(_sep())
+        genLbl = QLabel("General")
+        genLbl.setStyleSheet(
+            f"color: {theme.DIM}; font: bold 8pt 'Segoe UI'; padding: 2px 12px 4px 12px;")
+        self._layout.addWidget(genLbl)
 
         hk = self._settings["hotkeys"]
-
         self._overlayBtn = theme.KeybindButton(
-            self._frame, "Menu Toggle:",
+            self, "Menu Toggle:",
             binding=hk["overlay_toggle"],
             onChange=self._onOverlayToggleChange,
             onCapture=self._onCapture)
+        self._layout.addWidget(self._overlayBtn)
 
         self._quitBtn = theme.KeybindButton(
-            self._frame, "Quit:",
+            self, "Quit:",
             binding=hk["quit"],
             onChange=self._onQuitChange,
             onCapture=self._onCapture)
+        self._layout.addWidget(self._quitBtn)
 
-        # ---- Hotkeys — Recoil ----
-        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
-        tk.Label(self._frame, text="Recoil",
-                 fg=theme.DIM, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=12, pady=(2, 4))
+        # ---- Recoil hotkeys ----
+        self._layout.addWidget(_sep())
+        recoilLbl = QLabel("Recoil")
+        recoilLbl.setStyleSheet(
+            f"color: {theme.DIM}; font: bold 8pt 'Segoe UI'; padding: 2px 12px 4px 12px;")
+        self._layout.addWidget(recoilLbl)
 
         self._recoilBtn = theme.KeybindButton(
-            self._frame, "Recoil Toggle:",
+            self, "Recoil Toggle:",
             binding=hk["recoil_toggle"],
             onChange=self._onRecoilToggleChange,
             onCapture=self._onCapture)
+        self._layout.addWidget(self._recoilBtn)
 
         self._strengthDownBtn = theme.KeybindButton(
-            self._frame, "Strength -:",
+            self, "Strength -:",
             binding=hk["recoil_strength_down"],
             onChange=self._onStrengthDownChange,
             onCapture=self._onCapture)
+        self._layout.addWidget(self._strengthDownBtn)
 
         self._strengthUpBtn = theme.KeybindButton(
-            self._frame, "Strength +:",
+            self, "Strength +:",
             binding=hk["recoil_strength_up"],
             onChange=self._onStrengthUpChange,
             onCapture=self._onCapture)
-
-        tk.Frame(self._frame, bg=theme.PANEL_BG, height=7).pack()
-
-        self._refreshProcesses()
+        self._layout.addWidget(self._strengthUpBtn)
 
     # ------------------------------------------------------------------
     # Process list
     # ------------------------------------------------------------------
 
     def _refreshProcesses(self):
-        if not _PSUTIL_AVAILABLE:
-            self._windowCombo["values"] = [""]
-            return
-        try:
-            names = sorted(set(
-                p.info["name"] for p in psutil.process_iter(["name"])
-                if p.info["name"]
-            ))
-        except Exception:
-            names = []
-        current = self._windowVar.get()
-        self._windowCombo["values"] = [""] + names
-        if current not in names:
-            self._windowVar.set("")
+        self._windowCombo.blockSignals(True)
+        current = self._windowCombo.currentText()
+        self._windowCombo.clear()
+        self._windowCombo.addItem("")
+        if _PSUTIL_AVAILABLE:
+            try:
+                names = sorted(set(
+                    p.info["name"] for p in psutil.process_iter(["name"])
+                    if p.info["name"]
+                ))
+                self._windowCombo.addItems(names)
+            except Exception:
+                pass
+        if current:
+            idx = self._windowCombo.findText(current)
+            if idx >= 0:
+                self._windowCombo.setCurrentIndex(idx)
+        self._windowCombo.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    # Reload
+    # ------------------------------------------------------------------
+
+    def reload(self, settings: dict):
+        # Window filter
+        self._settings["window_filter"] = settings.get("window_filter", "")
+        filter_val = self._settings["window_filter"]
+        self._windowCombo.blockSignals(True)
+        if filter_val and self._windowCombo.findText(filter_val) < 0:
+            self._windowCombo.addItem(filter_val)
+        self._windowCombo.setCurrentText(filter_val)
+        self._windowCombo.blockSignals(False)
+
+        # Theme
+        new_theme = settings.get("theme", "Dark")
+        self._settings["theme"] = new_theme
+        for n, btn in self._themeBtns.items():
+            self._applyThemeButtonStyle(btn, n == new_theme)
+
+        # Hotkeys
+        hk = settings.get("hotkeys", {})
+        self._settings["hotkeys"].update(hk)
+        self._overlayBtn.setBinding(hk["overlay_toggle"])
+        self._quitBtn.setBinding(hk["quit"])
+        self._recoilBtn.setBinding(hk["recoil_toggle"])
+        self._strengthDownBtn.setBinding(hk["recoil_strength_down"])
+        self._strengthUpBtn.setBinding(hk["recoil_strength_up"])
 
     # ------------------------------------------------------------------
     # Change handlers
     # ------------------------------------------------------------------
 
     def _selectTheme(self, name: str):
-        self._themeVar.set(name)
         for n, btn in self._themeBtns.items():
-            active = (n == name)
-            btn.config(bg=theme.BTN_BG if active else theme.CARD_BG,
-                       fg=theme.ACCENT if active else theme.DIM)
-        self._onThemeChange()
-
-    def _onThemeChange(self):
-        name = self._themeVar.get()
+            self._applyThemeButtonStyle(btn, n == name)
         self._settings["theme"] = name
         self._onSettingsChanged(self._settings)
         if self._onThemeChanged:
             self._onThemeChanged(name)
 
-    def _onWindowChange(self, _=None):
-        self._settings["window_filter"] = self._windowVar.get()
+    def _applyThemeButtonStyle(self, btn: QPushButton, active: bool):
+        if active:
+            btn.setStyleSheet(
+                f"QPushButton {{ background-color: {theme.BTN_BG}; color: {theme.ACCENT};"
+                f" border: none; padding: 2px 8px; }}")
+        else:
+            btn.setStyleSheet(
+                f"QPushButton {{ background-color: {theme.CARD_BG}; color: {theme.DIM};"
+                f" border: none; padding: 2px 8px; }}"
+                f"QPushButton:hover {{ background-color: {theme.HOVER_BG}; }}")
+
+    def _onWindowChange(self, value: str):
+        self._settings["window_filter"] = value
         self._onSettingsChanged(self._settings)
 
     def _onOverlayToggleChange(self, binding: dict):
@@ -199,30 +251,10 @@ class SettingsPanel(Panel):
         self._settings["hotkeys"]["recoil_strength_up"] = binding
         self._onSettingsChanged(self._settings)
 
-    # ------------------------------------------------------------------
-    # Reload (called on profile load)
-    # ------------------------------------------------------------------
 
-    def reload(self, settings: dict):
-        self._settings["window_filter"] = settings.get("window_filter", "")
-        filter_val = self._settings["window_filter"]
-        if filter_val:
-            current = list(self._windowCombo["values"])
-            if filter_val not in current:
-                self._windowCombo["values"] = ["", filter_val] + [v for v in current if v]
-        self._windowVar.set(filter_val)
-
-        new_theme = settings.get("theme", "Dark")
-        self._themeVar.set(new_theme)
-        for n, btn in self._themeBtns.items():
-            active = (n == new_theme)
-            btn.config(bg=theme.BTN_BG if active else theme.CARD_BG,
-                       fg=theme.ACCENT if active else theme.DIM)
-
-        hk = settings.get("hotkeys", {})
-        self._settings["hotkeys"].update(hk)
-        self._overlayBtn.setBinding(hk["overlay_toggle"])
-        self._quitBtn.setBinding(hk["quit"])
-        self._recoilBtn.setBinding(hk["recoil_toggle"])
-        self._strengthDownBtn.setBinding(hk["recoil_strength_down"])
-        self._strengthUpBtn.setBinding(hk["recoil_strength_up"])
+def _sep():
+    s = QFrame()
+    s.setFrameShape(QFrame.Shape.HLine)
+    s.setFixedHeight(1)
+    s.setStyleSheet(f"background-color: {theme.PANEL_BORDER};")
+    return s

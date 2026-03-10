@@ -1,124 +1,136 @@
-import tkinter as tk
-from tkinter import ttk
-import profiles as prof
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+)
 
+import profiles as prof
 import theme
 from panels.base import Panel
 
 
 class ProfilesPanel(Panel):
-    def __init__(self, root: tk.Tk, profileData: dict,
-                 onLoad, onSave, onDelete):
-        super().__init__(root, right_anchor=True)
+
+    def __init__(self, parent, profileData: dict, onLoad, onSave, onDelete):
+        super().__init__(parent, right_anchor=True)
         self._profileData = profileData
         self._onLoad      = onLoad
         self._onSave      = onSave
         self._onDelete    = onDelete
         self._build()
 
-    def _build(self):
-        tk.Label(self._frame, text="Profiles",
-                 fg=theme.ACCENT, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
+    # ------------------------------------------------------------------
+    # Build
+    # ------------------------------------------------------------------
 
-        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
+    def _build(self):
+        title = QLabel("Profiles")
+        title.setStyleSheet(
+            f"color: {theme.ACCENT}; font: bold 10pt 'Segoe UI';"
+            f" padding: 8px 10px 2px 10px;")
+        self._layout.addWidget(title)
+
+        self._layout.addWidget(_sep())
 
         # Active profile label
-        tk.Label(self._frame, text="Active Profile:", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 9)).pack(anchor="w", padx=10)
+        activeLbl = QLabel("Active Profile:")
+        activeLbl.setStyleSheet("padding: 0px 10px;")
+        self._layout.addWidget(activeLbl)
 
-        # Combobox + quick-save button
-        comboRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
-        comboRow.pack(fill="x", padx=10, pady=(2, 8))
+        # Combobox + quick-save
+        comboRow = QFrame()
+        cl = QHBoxLayout(comboRow)
+        cl.setContentsMargins(10, 2, 10, 8)
+        cl.setSpacing(4)
+        self._combo = QComboBox(comboRow)
+        self._combo.setMinimumWidth(140)
+        cl.addWidget(self._combo)
+        self._quickSaveBtn = QPushButton("Save", comboRow)
+        self._quickSaveBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._quickSaveBtn.clicked.connect(self._onQuickSave)
+        cl.addWidget(self._quickSaveBtn)
+        cl.addStretch()
+        self._layout.addWidget(comboRow)
 
-        self._combo = ttk.Combobox(comboRow, state="readonly",
-                                    font=("Segoe UI", 9), width=18)
-        self._combo.pack(side="left", padx=(0, 4))
         self._refreshCombo()
-        self._combo.bind("<<ComboboxSelected>>", self._onSelect)
+        self._combo.currentTextChanged.connect(self._onSelect)
 
-        self._quickSaveBtn = tk.Button(comboRow, text="Save",
-                                       command=self._onQuickSave,
-                                       bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
-                                       font=("Segoe UI", 9), padx=6,
-                                       cursor="hand2")
-        self._quickSaveBtn.pack(side="left")
-        theme.addHoverEffect(self._quickSaveBtn)
-        self._updateQuickSaveBtn()
+        self._layout.addWidget(_sep())
 
-        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
+        # Name entry + save + delete
+        nameLbl = QLabel("Profile Name:")
+        nameLbl.setStyleSheet("padding: 4px 10px 2px 10px;")
+        self._layout.addWidget(nameLbl)
 
-        # Name field label
-        tk.Label(self._frame, text="Profile Name:", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 9)).pack(anchor="w", padx=10, pady=(4, 2))
-
-        # Name entry + Save + Delete
-        actionRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
-        actionRow.pack(fill="x", padx=10, pady=(0, 10))
-
-        self._nameVar = tk.StringVar()
-        tk.Entry(actionRow, textvariable=self._nameVar,
-                 font=("Segoe UI", 9), bg=theme.ENTRY_BG, fg=theme.BTN_FG,
-                 relief="flat", insertbackground=theme.BTN_FG,
-                 width=14).pack(side="left", padx=(0, 4))
-
-        save_btn = tk.Button(actionRow, text="Save",
-                             command=self._onSaveClick,
-                             bg=theme.BTN_BG, fg=theme.BTN_FG, relief="flat",
-                             font=("Segoe UI", 9), padx=6, cursor="hand2")
-        save_btn.pack(side="left", padx=(0, 2))
-        theme.addHoverEffect(save_btn)
-
-        del_btn = tk.Button(actionRow, text="Delete",
-                            command=self._onDeleteClick,
-                            bg=theme.BTN_BG, fg="#ff6666", relief="flat",
-                            font=("Segoe UI", 9), padx=6, cursor="hand2")
-        del_btn.pack(side="left")
-        theme.addHoverEffect(del_btn)
+        actionRow = QFrame()
+        al = QHBoxLayout(actionRow)
+        al.setContentsMargins(10, 0, 10, 10)
+        al.setSpacing(4)
+        self._nameEntry = QLineEdit(actionRow)
+        self._nameEntry.setPlaceholderText("Enter name...")
+        self._nameEntry.setMinimumWidth(100)
+        al.addWidget(self._nameEntry)
+        saveBtn = QPushButton("Save", actionRow)
+        saveBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        saveBtn.clicked.connect(self._onSaveClick)
+        al.addWidget(saveBtn)
+        delBtn = QPushButton("Delete", actionRow)
+        delBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        delBtn.setStyleSheet(
+            f"QPushButton {{ color: #ff6666; background-color: {theme.BTN_BG}; border: none; padding: 3px 8px; }}"
+            f"QPushButton:hover {{ background-color: {theme.HOVER_BG}; }}")
+        delBtn.clicked.connect(self._onDeleteClick)
+        al.addWidget(delBtn)
+        self._layout.addWidget(actionRow)
 
     # ------------------------------------------------------------------
     # Combo management
     # ------------------------------------------------------------------
 
     def refreshCombo(self):
+        self._combo.blockSignals(True)
         names = prof.profileNames(self._profileData)
-        self._combo["values"] = names
+        self._combo.clear()
+        self._combo.addItems(names)
         active = self._profileData["active"]
-        self._combo.set(active if active in names else names[0])
+        self._combo.setCurrentText(active if active in names else names[0])
+        self._combo.blockSignals(False)
         self._updateQuickSaveBtn()
 
-    def _updateQuickSaveBtn(self):
-        if not hasattr(self, "_quickSaveBtn"):
-            return
-        is_default = self._combo.get() == prof.DEFAULT_NAME
-        self._quickSaveBtn.config(state="disabled" if is_default else "normal",
-                                  fg=theme.DIM if is_default else theme.BTN_FG)
-
-    # internal alias used during build before the public name is needed
     _refreshCombo = refreshCombo
+
+    def _updateQuickSaveBtn(self):
+        is_default = self._combo.currentText() == prof.DEFAULT_NAME
+        self._quickSaveBtn.setEnabled(not is_default)
 
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
 
-    def _onSelect(self, _=None):
-        name = self._combo.get()
+    def _onSelect(self, name: str):
         if name:
             self._onLoad(name)
         self._updateQuickSaveBtn()
 
     def _onQuickSave(self):
-        name = self._combo.get()
+        name = self._combo.currentText()
         if name:
             self._onSave(name)
 
     def _onSaveClick(self):
-        name = self._nameVar.get().strip()
+        name = self._nameEntry.text().strip()
         if name:
             self._onSave(name)
 
     def _onDeleteClick(self):
-        name = self._nameVar.get().strip()
+        name = self._nameEntry.text().strip()
         if name:
             self._onDelete(name)
-            self._nameVar.set("")
+            self._nameEntry.clear()
+
+
+def _sep():
+    s = QFrame()
+    s.setFrameShape(QFrame.Shape.HLine)
+    s.setFixedHeight(1)
+    s.setStyleSheet(f"background-color: {theme.PANEL_BORDER};")
+    return s

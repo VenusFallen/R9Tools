@@ -1,13 +1,16 @@
-import tkinter as tk
-from tkinter import ttk
+"""
+Crosshair settings panel (UI only).
+Phase 5 adds crosshair drawing + window-filter polling to overlay_window.py.
+"""
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel
 
 import theme
 from panels.base import Panel
 
-_POLL_MS = 500   # foreground-window check interval
-
 
 class CrosshairPanel(Panel):
+
     COLORS = {
         "green":  "#00ff00",
         "red":    "#ff0000",
@@ -17,232 +20,133 @@ class CrosshairPanel(Panel):
     }
     STYLES     = ["Dot", "Cross", "Dot + Cross", "Circle", "Circle + Dot"]
     STYLE_KEYS = ["dot", "cross", "dot_cross", "circle", "circle_dot"]
-    CANVAS_HALF = 100   # 200×200 canvas; crosshair drawn at (100, 100)
 
-    def __init__(self, root: tk.Tk, settings: dict, engine, onSettingsChanged):
-        super().__init__(root)
+    def __init__(self, parent, settings: dict, engine, onSettingsChanged):
+        super().__init__(parent)
         self._settings          = settings
         self._engine            = engine
         self._onSettingsChanged = onSettingsChanged
-        self._sw = root.winfo_screenwidth()
-        self._sh = root.winfo_screenheight()
-        self._buildCanvas()
-        self._buildPanel()
-        self._redraw()
-        self._startWindowPoll()
+        self._build()
 
     # ------------------------------------------------------------------
-    # Canvas — always-on-top crosshair, independent of menu visibility
+    # Build
     # ------------------------------------------------------------------
 
-    def _buildCanvas(self):
-        size = self.CANVAS_HALF * 2
-        self._canvas = tk.Canvas(
-            self._root, width=size, height=size,
-            bg=theme.BG_TRANS, highlightthickness=0)
-        self._placeCanvas()
-        if not self._settings["crosshair"]["enabled"]:
-            self._canvas.place_forget()
-
-    def _placeCanvas(self):
-        x = self._sw // 2 - self.CANVAS_HALF
-        y = self._sh // 2 - self.CANVAS_HALF
-        self._canvas.place(x=x, y=y)
-
-    def _redraw(self):
-        self._canvas.delete("all")
-        s = self._settings["crosshair"]
-        if not s["enabled"]:
-            return
-
-        cx = cy  = self.CANVAS_HALF
-        color    = self.COLORS.get(s["color"], "#ffffff")
-        size     = s["size"]
-        thick    = s["thickness"]
-        gap      = s["gap"]
-        style    = s["style"]
-        OUT      = "#000000"
-        out_sz   = s["outline_size"]
-        out_w    = thick + out_sz * 2
-
-        def draw_dot(r):
-            if out_sz > 0:
-                self._canvas.create_oval(
-                    cx-r-1, cy-r-1, cx+r+1, cy+r+1, fill=OUT, outline="")
-            self._canvas.create_oval(
-                cx-r, cy-r, cx+r, cy+r, fill=color, outline="")
-
-        def draw_cross():
-            arms = [
-                (cx, cy - gap - size, cx, cy - gap),
-                (cx, cy + gap,        cx, cy + gap + size),
-                (cx - gap - size, cy, cx - gap,        cy),
-                (cx + gap,        cy, cx + gap + size,  cy),
-            ]
-            if out_sz > 0:
-                for x1, y1, x2, y2 in arms:
-                    self._canvas.create_line(
-                        x1, y1, x2, y2,
-                        fill=OUT, width=out_w, capstyle=tk.ROUND)
-            for x1, y1, x2, y2 in arms:
-                self._canvas.create_line(
-                    x1, y1, x2, y2,
-                    fill=color, width=thick, capstyle=tk.ROUND)
-
-        def draw_circle():
-            r = size
-            if out_sz > 0:
-                self._canvas.create_oval(
-                    cx-r-1, cy-r-1, cx+r+1, cy+r+1,
-                    outline=OUT, width=out_w, fill="")
-            self._canvas.create_oval(
-                cx-r, cy-r, cx+r, cy+r,
-                outline=color, width=thick, fill="")
-
-        if style == "dot":
-            draw_dot(max(1, size // 2))
-        elif style == "cross":
-            draw_cross()
-        elif style == "dot_cross":
-            draw_cross()
-            draw_dot(max(1, thick))
-        elif style == "circle":
-            draw_circle()
-        elif style == "circle_dot":
-            draw_circle()
-            draw_dot(max(1, thick))
-
-    # ------------------------------------------------------------------
-    # Window filter polling
-    # ------------------------------------------------------------------
-
-    def _startWindowPoll(self):
-        self._root.after(_POLL_MS, self._windowPoll)
-
-    def _windowPoll(self):
-        try:
-            if self._settings["crosshair"]["enabled"]:
-                if self._foregroundMatches():
-                    self._placeCanvas()
-                else:
-                    self._canvas.place_forget()
-        except tk.TclError:
-            return   # window destroyed
-        self._root.after(_POLL_MS, self._windowPoll)
-
-    def _foregroundMatches(self) -> bool:
-        """Returns True when the crosshair should be visible given the current window filter."""
-        filter_name = self._settings.get("window_filter", "")
-        return self._engine.windowMatchesFilter(filter_name)
-
-    # ------------------------------------------------------------------
-    # Panel — tab UI, shown/hidden with overlay menu
-    # ------------------------------------------------------------------
-
-    def _buildPanel(self):
+    def _build(self):
         s = self._settings["crosshair"]
 
-        tk.Label(self._frame, text="Crosshair",
-                 fg=theme.ACCENT, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
+        title = QLabel("Crosshair")
+        title.setStyleSheet(
+            f"color: {theme.ACCENT}; font: bold 10pt 'Segoe UI';"
+            f" padding: 8px 10px 2px 10px;")
+        self._layout.addWidget(title)
 
-        ttk.Separator(self._frame, orient="horizontal").pack(fill="x", padx=8, pady=4)
+        self._layout.addWidget(_sep())
 
-        # Enabled
-        self._enabledVar = tk.BooleanVar(value=s["enabled"])
-        enableRow = tk.Frame(self._frame, bg=theme.PANEL_BG)
-        enableRow.pack(fill="x", padx=10, pady=3)
-        tk.Label(enableRow, text="Enabled", fg=theme.LABEL_FG, bg=theme.PANEL_BG,
-                 font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
-        theme.ToggleSwitch(enableRow, variable=self._enabledVar,
-                           command=self._onToggle).pack(side="left")
+        # Enabled row
+        enableRow = QFrame()
+        el = QHBoxLayout(enableRow)
+        el.setContentsMargins(10, 3, 10, 3)
+        el.setSpacing(4)
+        elbl = QLabel("Enabled", enableRow)
+        elbl.setFixedWidth(120)
+        el.addWidget(elbl)
+        self._enabledSwitch = theme.ToggleSwitch(
+            enableRow, value=s["enabled"], command=self._onToggle)
+        el.addWidget(self._enabledSwitch)
+        el.addStretch()
+        self._layout.addWidget(enableRow)
 
         # Style + Color card
-        card1 = theme.buildCard(self._frame)
-        styleRow = tk.Frame(card1, bg=theme.CARD_BG)
-        styleRow.pack(fill="x", padx=10, pady=3)
-        tk.Label(styleRow, text="Style", fg=theme.LABEL_FG, bg=theme.CARD_BG,
-                 font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
-        self._styleVar = tk.StringVar(value=self._keyToLabel(s["style"]))
-        styleBox = ttk.Combobox(styleRow, textvariable=self._styleVar,
-                                values=self.STYLES, state="readonly",
-                                font=("Segoe UI", 9), width=14)
-        styleBox.pack(side="left")
-        styleBox.bind("<<ComboboxSelected>>", lambda _: self._onStyleChange())
+        card1 = theme.buildCard(self)
 
-        colorRow = tk.Frame(card1, bg=theme.CARD_BG)
-        colorRow.pack(fill="x", padx=10, pady=3)
-        tk.Label(colorRow, text="Color", fg=theme.LABEL_FG, bg=theme.CARD_BG,
-                 font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
-        self._colorVar = tk.StringVar(value=s["color"].capitalize())
-        colorBox = ttk.Combobox(colorRow, textvariable=self._colorVar,
-                                values=[c.capitalize() for c in self.COLORS],
-                                state="readonly", font=("Segoe UI", 9), width=14)
-        colorBox.pack(side="left")
-        colorBox.bind("<<ComboboxSelected>>", lambda _: self._onColorChange())
+        styleRow = QFrame(card1)
+        sl = QHBoxLayout(styleRow)
+        sl.setContentsMargins(10, 3, 10, 3)
+        sl.setSpacing(4)
+        QLabel("Style", styleRow).setFixedWidth(120)
+        slbl = QLabel("Style", styleRow)
+        slbl.setFixedWidth(120)
+        sl.addWidget(slbl)
+        self._styleCombo = QComboBox(styleRow)
+        self._styleCombo.addItems(self.STYLES)
+        self._styleCombo.setCurrentText(self._keyToLabel(s["style"]))
+        self._styleCombo.currentTextChanged.connect(self._onStyleChange)
+        sl.addWidget(self._styleCombo)
+        sl.addStretch()
+        card1.layout().addWidget(styleRow)
+
+        colorRow = QFrame(card1)
+        cl = QHBoxLayout(colorRow)
+        cl.setContentsMargins(10, 3, 10, 3)
+        cl.setSpacing(4)
+        clbl = QLabel("Color", colorRow)
+        clbl.setFixedWidth(120)
+        cl.addWidget(clbl)
+        self._colorCombo = QComboBox(colorRow)
+        self._colorCombo.addItems([c.capitalize() for c in self.COLORS])
+        self._colorCombo.setCurrentText(s["color"].capitalize())
+        self._colorCombo.currentTextChanged.connect(self._onColorChange)
+        cl.addWidget(self._colorCombo)
+        cl.addStretch()
+        card1.layout().addWidget(colorRow)
 
         # Size parameters card
-        card2 = theme.buildCard(self._frame)
-        self._sizeVar = tk.IntVar(value=s["size"])
-        theme.buildPlusMinusRow(card2, "Size", self._sizeVar, 1, 30, self._onParamChange)
-        self._thickVar = tk.IntVar(value=s["thickness"])
-        theme.buildPlusMinusRow(card2, "Thickness", self._thickVar, 1, 10, self._onParamChange)
-        self._gapVar = tk.IntVar(value=s["gap"])
-        theme.buildPlusMinusRow(card2, "Gap", self._gapVar, 0, 20, self._onParamChange)
-        self._outlineSizeVar = tk.IntVar(value=s["outline_size"])
-        theme.buildPlusMinusRow(card2, "Outline Size", self._outlineSizeVar, 0, 5, self._onParamChange)
-        tk.Frame(self._frame, bg=theme.PANEL_BG, height=4).pack()
+        card2 = theme.buildCard(self)
+        self._sizeRow    = theme.buildPlusMinusRow(
+            card2, "Size",         s["size"],         1,  30, self._onParamChange)
+        self._thickRow   = theme.buildPlusMinusRow(
+            card2, "Thickness",    s["thickness"],    1,  10, self._onParamChange)
+        self._gapRow     = theme.buildPlusMinusRow(
+            card2, "Gap",          s["gap"],          0,  20, self._onParamChange)
+        self._outlineRow = theme.buildPlusMinusRow(
+            card2, "Outline Size", s["outline_size"], 0,   5, self._onParamChange)
 
     # ------------------------------------------------------------------
-    # Reload (called on profile load)
+    # Reload
     # ------------------------------------------------------------------
 
     def reload(self, settings: dict):
         s = settings["crosshair"]
         self._settings["crosshair"].update(s)
-        self._enabledVar.set(False)
-        self._styleVar.set(self._keyToLabel(s["style"]))
-        self._colorVar.set(s["color"].capitalize())
-        self._sizeVar.set(s["size"])
-        self._thickVar.set(s["thickness"])
-        self._gapVar.set(s["gap"])
-        self._outlineSizeVar.set(s["outline_size"])
+
+        self._styleCombo.blockSignals(True)
+        self._colorCombo.blockSignals(True)
+
+        self._enabledSwitch.set(False)
         self._settings["crosshair"]["enabled"] = False
-        self._canvas.place_forget()
-        self._redraw()
+        self._styleCombo.setCurrentText(self._keyToLabel(s["style"]))
+        self._colorCombo.setCurrentText(s["color"].capitalize())
+        self._sizeRow.set(s["size"])
+        self._thickRow.set(s["thickness"])
+        self._gapRow.set(s["gap"])
+        self._outlineRow.set(s["outline_size"])
+
+        self._styleCombo.blockSignals(False)
+        self._colorCombo.blockSignals(False)
 
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
 
     def _onToggle(self):
-        enabled = self._enabledVar.get()
-        self._settings["crosshair"]["enabled"] = enabled
-        if enabled:
-            if self._foregroundMatches():
-                self._placeCanvas()
-            self._redraw()
-        else:
-            self._canvas.place_forget()
+        self._settings["crosshair"]["enabled"] = self._enabledSwitch.get()
         self._onSettingsChanged(self._settings)
 
-    def _onStyleChange(self):
-        self._settings["crosshair"]["style"] = self._labelToKey(self._styleVar.get())
-        self._redraw()
+    def _onStyleChange(self, label: str):
+        self._settings["crosshair"]["style"] = self._labelToKey(label)
         self._onSettingsChanged(self._settings)
 
-    def _onColorChange(self):
-        self._settings["crosshair"]["color"] = self._colorVar.get().lower()
-        self._redraw()
+    def _onColorChange(self, label: str):
+        self._settings["crosshair"]["color"] = label.lower()
         self._onSettingsChanged(self._settings)
 
     def _onParamChange(self):
         s = self._settings["crosshair"]
-        s["size"]         = self._sizeVar.get()
-        s["thickness"]    = self._thickVar.get()
-        s["gap"]          = self._gapVar.get()
-        s["outline_size"] = self._outlineSizeVar.get()
-        self._redraw()
+        s["size"]         = self._sizeRow.get()
+        s["thickness"]    = self._thickRow.get()
+        s["gap"]          = self._gapRow.get()
+        s["outline_size"] = self._outlineRow.get()
         self._onSettingsChanged(self._settings)
 
     # ------------------------------------------------------------------
@@ -253,10 +157,18 @@ class CrosshairPanel(Panel):
         try:
             return self.STYLES[self.STYLE_KEYS.index(key)]
         except ValueError:
-            return self.STYLES[1]   # default: Cross
+            return self.STYLES[1]
 
     def _labelToKey(self, label: str) -> str:
         try:
             return self.STYLE_KEYS[self.STYLES.index(label)]
         except ValueError:
-            return self.STYLE_KEYS[1]  # default: cross
+            return self.STYLE_KEYS[1]
+
+
+def _sep():
+    s = QFrame()
+    s.setFrameShape(QFrame.Shape.HLine)
+    s.setFixedHeight(1)
+    s.setStyleSheet(f"background-color: {theme.PANEL_BORDER};")
+    return s
