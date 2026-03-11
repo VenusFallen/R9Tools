@@ -21,12 +21,14 @@ from panels.crosshair import CrosshairPanel
 from panels.remapper  import RemapperPanel
 from panels.profiles  import ProfilesPanel
 from panels.settings  import SettingsPanel
+from panels.macros    import MacrosPanel
 
 _TAB_RECOIL    = 0
 _TAB_CROSSHAIR = 1
 _TAB_REMAPPER  = 2
-_TAB_PROFILES  = 3
-_TAB_SETTINGS  = 4
+_TAB_MACROS    = 3
+_TAB_PROFILES  = 4
+_TAB_SETTINGS  = 5
 
 _WIN_FLAGS = (
     Qt.WindowType.FramelessWindowHint
@@ -77,7 +79,8 @@ class _TopBarWindow(QWidget):
     def _build(self):
         for label, index in [("WEAPON",    _TAB_RECOIL),
                               ("CROSSHAIR", _TAB_CROSSHAIR),
-                              ("REMAPPER",  _TAB_REMAPPER)]:
+                              ("REMAPPER",  _TAB_REMAPPER),
+                              ("MACROS",    _TAB_MACROS)]:
             self._barLayout.addWidget(self._makeTabButton(label, index))
 
         self._barLayout.addStretch()
@@ -182,11 +185,12 @@ class _RoundedFrame(QFrame):
 
 class PanelWindow(QWidget):
 
-    def __init__(self, settings: dict, profileData: dict, engine, onSettingsChanged):
+    def __init__(self, settings: dict, profileData: dict, engine, macroEngine, onSettingsChanged):
         super().__init__()
         self._settings         = settings
         self._profileData      = profileData
         self._engine           = engine
+        self._macroEngine      = macroEngine
         self._settingsCallback = onSettingsChanged
         self._activeTab        = profileData.get("last_tab", _TAB_RECOIL)
         self._panelCollapsed   = False
@@ -239,6 +243,7 @@ class PanelWindow(QWidget):
         self._recoilPanel    = RecoilPanel(None, self._settings, self._engine, onChanged)
         self._crosshairPanel = CrosshairPanel(None, self._settings, self._engine, onChanged)
         self._remapperPanel  = RemapperPanel(None, self._settings, onChanged)
+        self._macrosPanel    = MacrosPanel(None, self._settings, self._macroEngine, onChanged)
         self._profilesPanel  = ProfilesPanel(
             None, self._profileData,
             onLoad=self._onProfileLoad,
@@ -253,6 +258,7 @@ class PanelWindow(QWidget):
             _TAB_RECOIL:    self._recoilPanel,
             _TAB_CROSSHAIR: self._crosshairPanel,
             _TAB_REMAPPER:  self._remapperPanel,
+            _TAB_MACROS:    self._macrosPanel,
             _TAB_PROFILES:  self._profilesPanel,
             _TAB_SETTINGS:  self._settingsPanel,
         }
@@ -418,6 +424,7 @@ class PanelWindow(QWidget):
         self._recoilPanel.reload(self._settings)
         self._crosshairPanel.reload(self._settings)
         self._remapperPanel.reload(self._settings)
+        self._macrosPanel.reload(self._settings)
         self._settingsPanel.reload(self._settings)
         self._profilesPanel.refreshCombo()
         self.flashBorder(theme.FLASH_LOAD)
@@ -446,4 +453,5 @@ class PanelWindow(QWidget):
                 self._recoilPanel.reload(self._settings)
                 self._crosshairPanel.reload(self._settings)
                 self._remapperPanel.reload(self._settings)
+                self._macrosPanel.reload(self._settings)
                 self._settingsPanel.reload(self._settings)

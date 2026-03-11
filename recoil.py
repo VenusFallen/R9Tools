@@ -120,6 +120,9 @@ class RecoilEngine:
         self._rfFireHeld     = False   # True while all RF trigger keys are physically held
         self._rfSuppressing  = False   # True when we have suppressed the fire trigger
         self._activeWeaponIdx = 0      # index into recoil.weapons list
+        self._macroEngine    = None    # set via setMacroEngine() after construction
+        self._lastKbDevice   = None    # last device refs sent to macro engine
+        self._lastMsDevice   = None
 
         self._applyThread = threading.Thread(target=self._applyLoop, daemon=True)
         self._listenThread = threading.Thread(target=self._listenLoop, daemon=True)
@@ -140,6 +143,9 @@ class RecoilEngine:
 
     def setQuitCallback(self, cb):
         self._quitCallback = cb
+
+    def setMacroEngine(self, engine):
+        self._macroEngine = engine
 
     def setSuspendHotkeys(self, suspended: bool):
         with self._lock:
@@ -283,16 +289,33 @@ class RecoilEngine:
                 continue
 
             # Track devices for use in synthesis
-            if inter.is_keyboard(deviceIdx):
+            is_kb = inter.is_keyboard(deviceIdx)
+            if is_kb:
                 self._kbDevice = device
             elif inter.is_mouse(deviceIdx):
                 self._msDevice = device
+
+            # Keep macro engine device refs current (only when they actually change)
+            if self._macroEngine:
+                if (self._kbDevice is not self._lastKbDevice
+                        or self._msDevice is not self._lastMsDevice):
+                    self._lastKbDevice = self._kbDevice
+                    self._lastMsDevice = self._msDevice
+                    self._macroEngine.setDevices(self._kbDevice, self._msDevice)
+
+            is_e0 = False
+            if isinstance(stroke, interception.KeyStroke):
+                is_e0 = bool(stroke.flags & interception.KeyFlag.KEY_E0)
 
             suppress = False
             if isinstance(stroke, interception.MouseStroke):
                 suppress = self._handleMouseStroke(stroke, inter)
             elif isinstance(stroke, interception.KeyStroke):
                 suppress = self._handleKeyboardStroke(stroke, inter)
+
+            # Macro trigger detection — never suppresses, fires as side effect
+            if self._macroEngine:
+                self._macroEngine.handleStroke(stroke, is_kb, is_e0)
 
             if not suppress:
                 device.send(stroke)
@@ -379,8 +402,13 @@ class RecoilEngine:
     def _handleKeyboardStroke(self, stroke, inter) -> bool:
         isKeyUp = bool(stroke.flags & interception.KeyFlag.KEY_UP)
         isE0    = bool(stroke.flags & interception.KeyFlag.KEY_E0)
+        label   = scancodeLabel(stroke.code, isE0)
 
         with self._lock:
+            if not isKeyUp:
+                self._held.add(label)
+            else:
+                self._held.discard(label)
             if self._hotkeysSuspended:
                 return False
             hotkeys      = self._fullSettings.get("hotkeys", {})
