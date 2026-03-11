@@ -12,9 +12,40 @@ Applies a configurable downward mouse pull while a trigger key combo is held, co
 
 - Strength is adjustable from 1–30 via the overlay panel or in-game hotkeys
 - **Humanize** adds subtle randomized variation to each pull to reduce pattern detection
+- **Multi-weapon slots** — configure separate strength values per weapon, each bindable to a key, mouse button, or scroll wheel direction
 - Toggle on/off at any time without opening the overlay
 - Trigger key and all hotkeys are rebindable from the Settings tab
 - When a **Window Filter** is set in Settings, recoil compensation only fires while that window has focus
+
+---
+
+### Rapid Fire
+
+Automatically re-fires a held trigger button at a configurable interval, simulating rapid repeated clicks.
+
+- Set any mouse button or key combo as the fire trigger
+- **Slot keys** — bind keys, mouse buttons, or scroll directions to arm/disarm rapid fire independently
+- Adjustable interval in milliseconds
+- **Humanize** adds random timing jitter to each click
+- Enabled checkbox always defaults to off on startup and profile load
+
+---
+
+### Macros
+
+Record and play back sequences of keyboard and mouse actions, triggered by any key or mouse button.
+
+- **Three execution modes:**
+  - **Once** — fires once on trigger release
+  - **Hold** — runs continuously while the trigger is held
+  - **Toggle** — starts on first press, stops on second press (loops)
+- **Recording** — capture real input with accurate timing; press Stop to convert to an editable action list
+- **Manual action builder** — add Key Tap, Key Down, Key Up, Mouse Click, Mouse Down, Mouse Up, and Delay steps individually via menu
+- **Delay steps** are editable inline after recording
+- **Humanize** adds random jitter to all delay timings during playback
+- Per-macro enable toggle — disable individual macros without deleting them
+- **Test** button fires the macro immediately from the editor
+- Macros are saved per-profile
 
 ---
 
@@ -42,12 +73,12 @@ When a **Window Filter** is set in Settings, remapping only fires while that win
 
 ### Profiles
 
-Save, load, and delete named configurations. Settings and mappings are stored per-profile, making it easy to maintain separate setups per game.
+Save, load, and delete named configurations. All module settings are stored per-profile, making it easy to maintain separate setups per game.
 
 - Select a profile from the dropdown, then click **Apply** to load it
 - Use **Save** next to the dropdown to overwrite the current profile, or enter a new name and click **Save** to create one
 - A protected **Default** profile is always available and cannot be deleted or overwritten
-- Loading a profile always starts with recoil, crosshair, and remapper disabled
+- Loading a profile always starts with recoil, crosshair, remapper, and rapid fire disabled
 - The top bar flashes to confirm saves (green), loads (blue), and deletes (red)
 
 ---
