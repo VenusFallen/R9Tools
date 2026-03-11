@@ -273,6 +273,8 @@ class RemapperPanel(Panel):
                 idx = inter.await_input(100)
                 if idx is None:
                     continue
+                if idx >= len(inter._devices):
+                    continue
                 device = inter._devices[idx]
                 stroke = device.receive()
                 if stroke is None:

@@ -64,7 +64,6 @@ class CrosshairPanel(Panel):
         sl = QHBoxLayout(styleRow)
         sl.setContentsMargins(10, 3, 10, 3)
         sl.setSpacing(4)
-        QLabel("Style", styleRow).setFixedWidth(120)
         slbl = QLabel("Style", styleRow)
         slbl.setFixedWidth(120)
         sl.addWidget(slbl)

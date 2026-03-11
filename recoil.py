@@ -116,8 +116,13 @@ class RecoilEngine:
         self._msDevice = None                  # tracked from listen loop for synthesis
         self._xDrift   = 0.0                   # Brownian X drift accumulator
 
+        self._rfArmed        = False   # True when weapon slot key has been toggled on
+        self._rfFireHeld     = False   # True while all RF trigger keys are physically held
+        self._rfSuppressing  = False   # True when we have suppressed the fire trigger
+
         self._applyThread = threading.Thread(target=self._applyLoop, daemon=True)
         self._listenThread = threading.Thread(target=self._listenLoop, daemon=True)
+        self._rfThread     = threading.Thread(target=self._rfFireLoop, daemon=True)
 
     # ------------------------------------------------------------------
     # Public API
@@ -143,6 +148,7 @@ class RecoilEngine:
         self._running = True
         self._applyThread.start()
         self._listenThread.start()
+        self._rfThread.start()
 
     def stop(self):
         self._running = False
@@ -154,10 +160,13 @@ class RecoilEngine:
             for evt in self._strengthHoldEvents.values():
                 evt.set()
             self._strengthHoldEvents.clear()
-            self._fullSettings = settings
-            self._settings = settings["recoil"]
+            self._fullSettings   = settings
+            self._settings       = settings["recoil"]
             self._held.clear()
             self._remapActive.clear()
+            self._rfArmed        = False
+            self._rfFireHeld     = False
+            self._rfSuppressing  = False
 
         # Release any remapped outputs that were held at settings-change time
         for to_input in active_remaps.values():
@@ -169,6 +178,21 @@ class RecoilEngine:
         with self._lock:
             combo = set(self._settings["trigger_keys"])
             return combo.issubset(self._held)
+
+    @property
+    def rfArmed(self) -> bool:
+        with self._lock:
+            return self._rfArmed
+
+    @property
+    def rfFiring(self) -> bool:
+        with self._lock:
+            return self._rfFireHeld and self._rfSuppressing
+
+    def _rfShouldActivate_locked(self) -> bool:
+        """Check RF conditions. Must be called with self._lock held."""
+        rf = self._fullSettings.get("rapidfire", {})
+        return rf.get("enabled", False) and self._rfArmed
 
     # ------------------------------------------------------------------
     # Apply loop
@@ -263,12 +287,49 @@ class RecoilEngine:
         # Track held buttons for recoil trigger detection
         for key, (downFlag, upFlag) in MOUSE_BUTTON_FLAGS.items():
             if stroke.button_flags & downFlag:
+                is_rf_trig    = False
+                should_activate = False
+                wf            = ""
                 with self._lock:
                     self._held.add(key)
+                    rf           = self._fullSettings.get("rapidfire", {})
+                    trigger_keys = set(rf.get("trigger_keys", []))
+                    wf           = self._fullSettings.get("window_filter", "")
+
+                    if key in trigger_keys:
+                        is_rf_trig = True
+                        if self._rfSuppressing:
+                            # Already suppressing — suppress re-press of trigger key
+                            return True
+                        if trigger_keys.issubset(self._held):
+                            self._rfFireHeld = True
+                            should_activate  = self._rfShouldActivate_locked()
+
+                # windowMatchesFilter uses Win32 APIs — call outside the lock
+                if is_rf_trig and should_activate and self.windowMatchesFilter(wf):
+                    with self._lock:
+                        self._rfSuppressing = True
+                    return True
                 return self._tryRemap(("mouse", key), False, inter)
+
             elif stroke.button_flags & upFlag:
+                suppress_rf = False
                 with self._lock:
                     self._held.discard(key)
+                    rf           = self._fullSettings.get("rapidfire", {})
+                    trigger_keys = set(rf.get("trigger_keys", []))
+                    slot_keys    = list(rf.get("slot_keys", []))
+                    if key in trigger_keys:
+                        self._rfFireHeld = False
+                        suppress_rf      = self._rfSuppressing
+                        self._rfSuppressing = False
+                    # Mouse slot keys: set armed state based on slot's enabled flag
+                    for sk in slot_keys:
+                        if sk.get("type") == "mouse" and sk.get("button") == key:
+                            self._rfArmed = sk.get("enabled", True)
+                            break
+                if suppress_rf:
+                    return True
                 return self._tryRemap(("mouse", key), True, inter)
 
         # Scroll wheel
@@ -277,6 +338,14 @@ class RecoilEngine:
             if delta > 32767:   # interpret uint16 as signed
                 delta -= 65536
             direction = "up" if delta > 0 else "down"
+            # Scroll slot keys: set armed state based on slot's enabled flag
+            with self._lock:
+                rf        = self._fullSettings.get("rapidfire", {})
+                slot_keys = list(rf.get("slot_keys", []))
+                for sk in slot_keys:
+                    if sk.get("type") == "scroll" and sk.get("direction") == direction:
+                        self._rfArmed = sk.get("enabled", True)
+                        break
             return self._tryRemap(("scroll", direction), None, inter)
 
         return False
@@ -294,6 +363,8 @@ class RecoilEngine:
             strengthDown = hotkeys.get("recoil_strength_down", {"code": 26, "e0": False})
             strengthUp   = hotkeys.get("recoil_strength_up",   {"code": 27, "e0": False})
             quitBind     = hotkeys.get("quit",                 {"code": 83, "e0": True})
+            rf           = self._fullSettings.get("rapidfire", {})
+            rfSlotKeys   = list(rf.get("slot_keys", []))
 
         if not isKeyUp:
             if stroke.code == strengthDown["code"] and isE0 == strengthDown["e0"]:
@@ -312,6 +383,7 @@ class RecoilEngine:
                     threading.Thread(target=self._strengthHoldLoop,
                                      args=(1, evt), daemon=True).start()
                 return False
+
             # Non-hotkey key-down: try remap
             return self._tryRemap(("key", stroke.code, isE0), False, inter)
 
@@ -344,6 +416,14 @@ class RecoilEngine:
             if self._quitCallback:
                 self._quitCallback()
             return False
+
+        # Keyboard slot keys: set armed state based on slot's enabled flag (pass through)
+        for sk in rfSlotKeys:
+            if sk.get("type") not in ("mouse", "scroll"):
+                if sk.get("code") == stroke.code and sk.get("e0", False) == isE0:
+                    with self._lock:
+                        self._rfArmed = sk.get("enabled", True)
+                    return False
 
         # Non-hotkey key-up: try remap
         return self._tryRemap(("key", stroke.code, isE0), True, inter)
@@ -435,7 +515,9 @@ class RecoilEngine:
                 if to.get("e0"):
                     flags |= interception.KeyFlag.KEY_E0
                 stroke = interception.KeyStroke(to["code"], flags)
-                kb = self._kbDevice or (inter._devices.get(inter.keyboard) if inter else None)
+                kb = self._kbDevice or (
+                    inter._devices[inter.keyboard]
+                    if inter and inter.keyboard < len(inter._devices) else None)
                 if kb:
                     kb.send(stroke)
 
@@ -444,7 +526,9 @@ class RecoilEngine:
                 if pair:
                     flag = pair[1] if is_up else pair[0]
                     stroke = interception.MouseStroke(0, flag, 0, 0, 0)
-                    ms = self._msDevice or (inter._devices.get(inter.mouse) if inter else None)
+                    ms = self._msDevice or (
+                        inter._devices[inter.mouse]
+                        if inter and inter.mouse < len(inter._devices) else None)
                     if ms:
                         ms.send(stroke)
 
@@ -453,10 +537,66 @@ class RecoilEngine:
                 delta = 120 if direction == "up" else -120
                 data  = delta if delta > 0 else (delta & 0xFFFF)
                 stroke = interception.MouseStroke(0, _SCROLL_WHEEL_FLAG, data, 0, 0)
-                ms = self._msDevice or (inter._devices.get(inter.mouse) if inter else None)
+                ms = self._msDevice or (
+                    inter._devices[inter.mouse]
+                    if inter and inter.mouse < len(inter._devices) else None)
                 if ms:
                     ms.send(stroke)
 
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Rapid fire loop
+    # ------------------------------------------------------------------
+
+    def _rfFireLoop(self):
+        while self._running:
+            with self._lock:
+                should_fire = self._rfFireHeld and self._rfSuppressing
+                if should_fire:
+                    rf            = self._fullSettings.get("rapidfire", {})
+                    interval_ms   = rf.get("interval_ms", 100)
+                    humanize      = rf.get("humanize", False)
+                    window_filter = self._fullSettings.get("window_filter", "")
+
+            if not should_fire:
+                time.sleep(0.01)
+                continue
+
+            if self.windowMatchesFilter(window_filter):
+                self._sendRFClick()
+            if humanize:
+                sleep_ms = interval_ms * random.uniform(0.8, 1.2)
+            else:
+                sleep_ms = interval_ms
+            time.sleep(sleep_ms / 1000.0)
+
+    def _sendRFClick(self):
+        with self._lock:
+            rf           = self._fullSettings.get("rapidfire", {})
+            humanize     = rf.get("humanize", False)
+            trigger_keys = list(rf.get("trigger_keys", ["mouse_left"]))
+        hold_ms = random.randint(30, 60) if humanize else 40
+
+        if not self._msDevice:
+            return
+
+        pairs = []
+        for key in trigger_keys:
+            pair = MOUSE_BUTTON_FLAGS.get(key)
+            if pair:
+                pairs.append(pair)
+
+        if not pairs:
+            return
+
+        try:
+            for down_flag, _ in pairs:
+                self._msDevice.send(interception.MouseStroke(0, down_flag, 0, 0, 0))
+            time.sleep(hold_ms / 1000.0)
+            for _, up_flag in pairs:
+                self._msDevice.send(interception.MouseStroke(0, up_flag, 0, 0, 0))
         except Exception:
             pass
 

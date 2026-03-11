@@ -35,6 +35,13 @@ _DEFAULT_SETTINGS = {
         "enabled":  False,
         "mappings": [],
     },
+    "rapidfire": {
+        "enabled":      False,
+        "trigger_keys": ["mouse_left"],
+        "slot_keys":    [],
+        "interval_ms":  100,
+        "humanize":     False,
+    },
 }
 
 _EMPTY = {
@@ -92,6 +99,35 @@ def load() -> dict:
         for key, val in _DEFAULT_SETTINGS["recoil"].items():
             profile["recoil"].setdefault(key, copy.deepcopy(val) if isinstance(val, (dict, list)) else val)
 
+        # Migrate rapidfire defaults
+        profile.setdefault("rapidfire", copy.deepcopy(_DEFAULT_SETTINGS["rapidfire"]))
+        rf = profile["rapidfire"]
+        # Convert old single trigger_key dict → trigger_keys list
+        if "trigger_key" in rf:
+            old_trig = rf.pop("trigger_key")
+            if "trigger_keys" not in rf:
+                if old_trig.get("type") == "mouse":
+                    rf["trigger_keys"] = [old_trig.get("button", "mouse_left")]
+                else:
+                    rf["trigger_keys"] = ["mouse_left"]
+        # Convert old single slot_key → slot_keys list
+        if "slot_key" in rf:
+            old_sk = rf.pop("slot_key")
+            if "slot_keys" not in rf:
+                # Only migrate if it was actually bound
+                if old_sk.get("code", 0) or old_sk.get("type") in ("mouse", "scroll"):
+                    old_sk.setdefault("enabled", True)
+                    old_sk.setdefault("type", "key")
+                    rf["slot_keys"] = [old_sk]
+                else:
+                    rf["slot_keys"] = []
+        # Backfill any missing keys from defaults
+        for key, val in _DEFAULT_SETTINGS["rapidfire"].items():
+            rf.setdefault(key, copy.deepcopy(val) if isinstance(val, (dict, list)) else val)
+
+        # Remove old rf_engage hotkey (slot key now lives in rapidfire.slot_key)
+        profile["hotkeys"].pop("rf_engage", None)
+
     return data
 
 
@@ -115,6 +151,8 @@ def loadProfile(data: dict, name: str) -> dict | None:
     settings["recoil"]["enabled"]    = False
     settings["crosshair"]["enabled"] = False
     settings["remapper"]["enabled"]  = False
+    settings.setdefault("rapidfire", copy.deepcopy(_DEFAULT_SETTINGS["rapidfire"]))
+    settings["rapidfire"]["enabled"] = False
     save(data)
     return settings
 

@@ -253,6 +253,7 @@ class SettingsPanel(Panel):
         self._onSettingsChanged(self._settings)
 
 
+
 def _sep():
     s = QFrame()
     s.setFrameShape(QFrame.Shape.HLine)

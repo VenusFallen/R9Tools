@@ -378,12 +378,21 @@ class KeybindButton(QWidget):
     # via automatic QueuedConnection (cross-thread signal delivery).
     _done = Signal()
 
+    _MOUSE_LABELS = {
+        "mouse_left":   "LMB",
+        "mouse_right":  "RMB",
+        "mouse_middle": "MMB",
+        "mouse_x1":     "Mouse4",
+        "mouse_x2":     "Mouse5",
+    }
+
     def __init__(self, parent: QWidget, label: str, binding: dict,
-                 onChange, onCapture=None):
+                 onChange, onCapture=None, keyboard_only: bool = True):
         super().__init__(parent)
         self._binding        = dict(binding)
         self._onChange       = onChange
         self._onCapture      = onCapture
+        self._keyboard_only  = keyboard_only
         self._capturing      = False
         self._captureSuccess = False
 
@@ -412,6 +421,15 @@ class KeybindButton(QWidget):
 
     def _bindingLabel(self) -> str:
         from recoil import scancodeLabel
+        t = self._binding.get("type")
+        if t == "mouse":
+            button = self._binding.get("button", "")
+            return self._MOUSE_LABELS.get(button, button or "(unbound)")
+        if t == "scroll":
+            direction = self._binding.get("direction", "up")
+            return "Wheel Up" if direction == "up" else "Wheel Down"
+        if not self._binding.get("code"):
+            return "(unbound)"
         return scancodeLabel(self._binding["code"], self._binding["e0"])
 
     def _startCapture(self):
@@ -421,25 +439,32 @@ class KeybindButton(QWidget):
         self._captureSuccess = False
         if self._onCapture:
             self._onCapture(True)
-        self._btn.setText("Press a key...")
+        prompt = "Press a key..." if self._keyboard_only else "Press key or button..."
+        self._btn.setText(prompt)
         self._btn.setStyleSheet(f"color: {ACTIVE_FG};")
         threading.Thread(target=self._captureThread, daemon=True).start()
 
     def _captureThread(self):
         import interception as _ic
+        from recoil import MOUSE_BUTTON_FLAGS, _SCROLL_WHEEL_FLAG
         inter = _ic.Interception()
         inter.set_filter(inter.is_keyboard, _ic.FilterKeyFlag.FILTER_KEY_ALL)
+        if not self._keyboard_only:
+            inter.set_filter(
+                inter.is_mouse, _ic.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
 
         try:
             while self._capturing:
                 idx = inter.await_input(100)
                 if idx is None:
                     continue
+                if idx >= len(inter._devices):
+                    continue
                 device = inter._devices[idx]
                 stroke = device.receive()
                 if stroke is None:
                     continue
-                device.send(stroke)   # pass key through to OS
+                device.send(stroke)   # pass through to OS
 
                 if isinstance(stroke, _ic.KeyStroke):
                     if stroke.flags & _ic.KeyFlag.KEY_UP:
@@ -448,6 +473,26 @@ class KeybindButton(QWidget):
                             "e0":   bool(stroke.flags & _ic.KeyFlag.KEY_E0),
                         }
                         self._captureSuccess = True
+                        break
+                elif not self._keyboard_only and isinstance(stroke, _ic.MouseStroke):
+                    # Scroll wheel
+                    if stroke.button_flags & _SCROLL_WHEEL_FLAG:
+                        delta = stroke.button_data
+                        if delta > 32767:
+                            delta -= 65536
+                        self._binding = {
+                            "type":      "scroll",
+                            "direction": "up" if delta > 0 else "down",
+                        }
+                        self._captureSuccess = True
+                        break
+                    # Mouse buttons (on release)
+                    for name, (down_flag, up_flag) in MOUSE_BUTTON_FLAGS.items():
+                        if stroke.button_flags & up_flag:
+                            self._binding = {"type": "mouse", "button": name}
+                            self._captureSuccess = True
+                            break
+                    if self._captureSuccess:
                         break
         finally:
             self._capturing = False

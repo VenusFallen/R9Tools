@@ -75,7 +75,7 @@ class _TopBarWindow(QWidget):
         self._applyBarStyle()
 
     def _build(self):
-        for label, index in [("RECOIL",    _TAB_RECOIL),
+        for label, index in [("WEAPON",    _TAB_RECOIL),
                               ("CROSSHAIR", _TAB_CROSSHAIR),
                               ("REMAPPER",  _TAB_REMAPPER)]:
             self._barLayout.addWidget(self._makeTabButton(label, index))
