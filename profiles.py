@@ -42,6 +42,7 @@ _DEFAULT_SETTINGS = {
         "interval_ms":  100,
         "humanize":     False,
     },
+    "macros": [],
 }
 
 _EMPTY = {
@@ -134,6 +135,9 @@ def load() -> dict:
         # Remove old rf_engage hotkey (slot key now lives in rapidfire.slot_key)
         profile["hotkeys"].pop("rf_engage", None)
 
+        # Migrate macros (new in V0.4.0 — backfill empty list)
+        profile.setdefault("macros", [])
+
     return data
 
 
@@ -159,6 +163,7 @@ def loadProfile(data: dict, name: str) -> dict | None:
     settings["remapper"]["enabled"]  = False
     settings.setdefault("rapidfire", copy.deepcopy(_DEFAULT_SETTINGS["rapidfire"]))
     settings["rapidfire"]["enabled"] = False
+    settings.setdefault("macros", [])
     save(data)
     return settings
 

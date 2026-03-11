@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 
 import profiles as prof
 from recoil        import RecoilEngine
+from macro_engine  import MacroEngine
 from bridge        import UIBridge
 from overlay_window import OverlayWindow
 from panel_window  import PanelWindow
@@ -35,20 +36,23 @@ def main():
     cfg["crosshair"]["enabled"] = False
     cfg["remapper"]["enabled"]  = False
 
-    engine = RecoilEngine(cfg)
+    engine       = RecoilEngine(cfg)
+    macro_engine = MacroEngine(cfg)
+    engine.setMacroEngine(macro_engine)
 
     # Overlay needs cfg + engine before onSettingsChanged is defined
     overlay_win = OverlayWindow(cfg, engine)
 
     def onSettingsChanged(updated: dict):
         engine.updateSettings(updated)
+        macro_engine.updateSettings(updated)
         overlay_win.update()   # repaint crosshair when settings change
 
     # Signal bridge — lives on the main thread; engine stores .emit references.
     # Cross-thread emissions are automatically delivered via QueuedConnection.
     bridge = UIBridge()
 
-    panel_win = PanelWindow(cfg, profileData, engine, onSettingsChanged)
+    panel_win = PanelWindow(cfg, profileData, engine, macro_engine, onSettingsChanged)
 
     # Bridge → UI
     bridge.overlayToggled.connect(panel_win.toggleOverlay)
@@ -72,6 +76,7 @@ def main():
     app.exec()
 
     engine.stop()
+    macro_engine.stop()
 
 
 if __name__ == "__main__":
