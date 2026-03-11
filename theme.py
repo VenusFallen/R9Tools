@@ -40,6 +40,7 @@ THEMES = {
         "ACCENT":       "#4a9eff",
         "DIM":          "#888888",
         "ACTIVE_FG":    "#22c55e",
+        "MINUS_FG":     "#f59e0b",
         "ENTRY_BG":     "#333333",
         "PANEL_BORDER": "#2a2a2a",
         "CARD_BG":      "#252525",
@@ -55,6 +56,7 @@ THEMES = {
         "ACCENT":       "#1a6fd4",
         "DIM":          "#606060",
         "ACTIVE_FG":    "#16a34a",
+        "MINUS_FG":     "#d97706",
         "ENTRY_BG":     "#dde0e4",
         "PANEL_BORDER": "#9a9ea2",
         "CARD_BG":      "#e6e8ea",
@@ -86,6 +88,7 @@ LABEL_FG     = THEMES["Dark"]["LABEL_FG"]
 ACCENT       = THEMES["Dark"]["ACCENT"]
 DIM          = THEMES["Dark"]["DIM"]
 ACTIVE_FG    = THEMES["Dark"]["ACTIVE_FG"]
+MINUS_FG     = THEMES["Dark"]["MINUS_FG"]
 ENTRY_BG     = THEMES["Dark"]["ENTRY_BG"]
 PANEL_BORDER = THEMES["Dark"]["PANEL_BORDER"]
 CARD_BG      = THEMES["Dark"]["CARD_BG"]
@@ -152,6 +155,11 @@ def makeQSS() -> str:
         f"QScrollBar:vertical {{ background-color: {PANEL_BG}; width: 8px; border: none; }}"
         f"QScrollBar::handle:vertical {{ background-color: {BTN_BG}; border-radius: 4px; min-height: 20px; }}"
         f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
+
+        f"QPushButton#plusBtn  {{ color: {ACTIVE_FG}; }}"
+        f"QPushButton#minusBtn {{ color: {MINUS_FG}; }}"
+        f"QFrame#card QPushButton#plusBtn  {{ color: {ACTIVE_FG}; }}"
+        f"QFrame#card QPushButton#minusBtn {{ color: {MINUS_FG}; }}"
     )
 
 
@@ -205,23 +213,26 @@ class PlusMinusRow(QWidget):
     """
 
     def __init__(self, parent: QWidget, label: str, value: int,
-                 minVal: int, maxVal: int, onChange):
+                 minVal: int, maxVal: int, onChange, label_width: int = 120):
         super().__init__(parent)
         self._value    = value
         self._minVal   = minVal
         self._maxVal   = maxVal
         self._onChange = onChange
+        self._inline   = label_width == 0
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 3, 10, 3)
+        layout.setContentsMargins(0 if self._inline else 10, 3, 0 if self._inline else 10, 3)
         layout.setSpacing(4)
 
-        lbl = QLabel(label, self)
-        lbl.setFixedWidth(120)
-        layout.addWidget(lbl)
+        if not self._inline:
+            lbl = QLabel(label, self)
+            lbl.setFixedWidth(label_width)
+            layout.addWidget(lbl)
 
         self._minusBtn = QPushButton("−", self)
         self._minusBtn.setFixedSize(24, 24)
+        self._minusBtn.setObjectName("minusBtn")
         self._minusBtn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._minusBtn.clicked.connect(lambda: self._adjust(-1))
         layout.addWidget(self._minusBtn)
@@ -234,11 +245,13 @@ class PlusMinusRow(QWidget):
 
         self._plusBtn = QPushButton("+", self)
         self._plusBtn.setFixedSize(24, 24)
+        self._plusBtn.setObjectName("plusBtn")
         self._plusBtn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._plusBtn.clicked.connect(lambda: self._adjust(1))
         layout.addWidget(self._plusBtn)
 
-        layout.addStretch()
+        if not self._inline:
+            layout.addStretch()
 
     def get(self) -> int:
         return self._value

@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QColor, QPainterPath, QRegion
 from PySide6.QtWidgets import (
     QApplication, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QPushButton,
-    QStackedWidget, QVBoxLayout, QWidget,
+    QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 import profiles as prof
@@ -267,7 +267,13 @@ class PanelWindow(QWidget):
         self._activeTab = index
         self._topBarWin.setActiveTab(index)
         if not self._panelCollapsed:
-            self._stack.setCurrentWidget(self._panels[index])
+            current = self._panels[index]
+            for panel in self._panels.values():
+                panel.setSizePolicy(
+                    QSizePolicy.Policy.Preferred if panel is current else QSizePolicy.Policy.Ignored,
+                    QSizePolicy.Policy.Preferred if panel is current else QSizePolicy.Policy.Ignored,
+                )
+            self._stack.setCurrentWidget(current)
         self._reposition()
 
     def _toggleTab(self, index: int):

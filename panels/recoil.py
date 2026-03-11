@@ -161,7 +161,6 @@ class RecoilPanel(Panel):
         self._layout.addWidget(weaponLbl)
 
         self._weaponWidget = QWidget()
-        self._weaponWidget.setStyleSheet(f"background-color: {theme.PANEL_BG};")
         self._weaponLayout = QVBoxLayout(self._weaponWidget)
         self._weaponLayout.setContentsMargins(10, 0, 10, 0)
         self._weaponLayout.setSpacing(1)
@@ -181,7 +180,7 @@ class RecoilPanel(Panel):
         addWeaponBtn.clicked.connect(self._startAddWeapon)
         self._layout.addWidget(addWeaponBtn)
 
-        self._weaponStrLabels: list = []
+        self._weaponPlusMinusRows: list = []
         self._weaponKeyBtns:   list = []
         self._refreshWeaponRows()
 
@@ -290,10 +289,11 @@ class RecoilPanel(Panel):
             item = self._weaponLayout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        self._weaponStrLabels = []
-        self._weaponKeyBtns   = []
+        self._weaponPlusMinusRows = []
+        self._weaponKeyBtns       = []
         for w in self._settings.get("recoil", {}).get("weapons", []):
             self._addWeaponRow(w)
+        QTimer.singleShot(0, lambda: self.window().adjustSize())
 
     def _addWeaponRow(self, w: dict):
         row = QFrame(self._weaponWidget)
@@ -308,23 +308,21 @@ class RecoilPanel(Panel):
         rl.addWidget(keyBtn)
         self._weaponKeyBtns.append(keyBtn)
 
-        minusBtn = QPushButton("−", row)
-        minusBtn.setFixedWidth(22)
-        minusBtn.setCursor(Qt.CursorShape.PointingHandCursor)
-        rl.addWidget(minusBtn)
+        pmRow = theme.PlusMinusRow(row, "", w.get("strength_y", 5), 1, 30, lambda: None, label_width=0)
+        def _onChange(ww=w, pr=pmRow):
+            ww["strength_y"] = pr.get()
+            self._onSettingsChanged(self._settings)
+        pmRow._onChange = _onChange
+        rl.addWidget(pmRow)
+        self._weaponPlusMinusRows.append(pmRow)
 
-        strLbl = QLabel(f"{w.get('strength_y', 5)}", row)
-        strLbl.setStyleSheet(f"color: {theme.LABEL_FG}; min-width: 24px; qproperty-alignment: AlignCenter;")
-        rl.addWidget(strLbl)
-        self._weaponStrLabels.append(strLbl)
-
-        plusBtn = QPushButton("+", row)
-        plusBtn.setFixedWidth(22)
-        plusBtn.setCursor(Qt.CursorShape.PointingHandCursor)
-        rl.addWidget(plusBtn)
-
-        minusBtn.clicked.connect(lambda _, ww=w, lbl=strLbl: self._adjustWeaponStr(ww, lbl, -1))
-        plusBtn.clicked.connect(lambda _, ww=w, lbl=strLbl: self._adjustWeaponStr(ww, lbl, 1))
+        div = QFrame(row)
+        div.setFrameShape(QFrame.Shape.VLine)
+        div.setFixedSize(1, 16)
+        div.setStyleSheet(f"background-color: {theme.DIM};")
+        rl.addSpacing(4)
+        rl.addWidget(div)
+        rl.addSpacing(4)
 
         delBtn = QPushButton("×", row)
         delBtn.setFixedWidth(24)
@@ -337,11 +335,6 @@ class RecoilPanel(Panel):
 
         rl.addStretch()
         self._weaponLayout.addWidget(row)
-
-    def _adjustWeaponStr(self, w: dict, lbl: QLabel, delta: int):
-        w["strength_y"] = max(1, min(30, w.get("strength_y", 5) + delta))
-        lbl.setText(str(w["strength_y"]))
-        self._onSettingsChanged(self._settings)
 
     def _editWeaponKey(self, w: dict, btn: QPushButton):
         if self._slotCapturing or self._capturing or self._rfTrigCapturing:
@@ -462,6 +455,7 @@ class RecoilPanel(Panel):
                 item.widget().deleteLater()
         for sk in self._settings.get("rapidfire", {}).get("slot_keys", []):
             self._addSlotRow(sk)
+        QTimer.singleShot(0, lambda: self.window().adjustSize())
 
     def _addSlotRow(self, sk: dict):
         row = QFrame(self._slotWidget)
@@ -634,8 +628,8 @@ class RecoilPanel(Panel):
 
     def updateStrength(self, value: int):
         idx = self._engine.activeWeaponIdx
-        if idx < len(self._weaponStrLabels):
-            self._weaponStrLabels[idx].setText(str(value))
+        if idx < len(self._weaponPlusMinusRows):
+            self._weaponPlusMinusRows[idx].set(value)
 
     # ------------------------------------------------------------------
     # Event handlers — Recoil
