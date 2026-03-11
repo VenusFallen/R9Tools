@@ -78,6 +78,8 @@ class RecoilPanel(Panel):
         self._slotCaptureCallback = None
         self._slotCaptureResult   = None
 
+        self._weaponCapture = False   # True when slot capture is for a weapon (not RF slot)
+
         self._liveUpdate.connect(self._onLiveUpdate)
         self._captureFinished.connect(self._finishCapture)
         self._rfTrigLiveUpdate.connect(self._onRfTrigLiveUpdate)
@@ -124,8 +126,6 @@ class RecoilPanel(Panel):
         self._layout.addWidget(_sep())
 
         card = theme.buildCard(self)
-        self._syRow = theme.buildPlusMinusRow(
-            card, "Pull Strength (px)", s["strength_y"], 1, 30, self._onSyChange)
 
         humanizeRow = QFrame(card)
         hl = QHBoxLayout(humanizeRow)
@@ -153,6 +153,37 @@ class RecoilPanel(Panel):
         self._keybindBtn.clicked.connect(self._startCapture)
         tl.addWidget(self._keybindBtn)
         card.layout().addWidget(triggerRow)
+
+        # Weapon slots section
+        weaponLbl = QLabel("Weapons")
+        weaponLbl.setStyleSheet(
+            f"color: {theme.DIM}; font: bold 8pt 'Segoe UI'; padding: 6px 12px 2px 12px;")
+        self._layout.addWidget(weaponLbl)
+
+        self._weaponWidget = QWidget()
+        self._weaponWidget.setStyleSheet(f"background-color: {theme.PANEL_BG};")
+        self._weaponLayout = QVBoxLayout(self._weaponWidget)
+        self._weaponLayout.setContentsMargins(10, 0, 10, 0)
+        self._weaponLayout.setSpacing(1)
+        self._layout.addWidget(self._weaponWidget)
+
+        self._weaponCaptureLabel = QLabel("")
+        self._weaponCaptureLabel.setStyleSheet(
+            f"color: {theme.ACTIVE_FG}; font: italic 9pt 'Segoe UI';"
+            f" padding: 0px 10px 2px 10px;")
+        self._weaponCaptureLabel.setVisible(False)
+        self._layout.addWidget(self._weaponCaptureLabel)
+
+        addWeaponBtn = QPushButton("+ Add Weapon")
+        addWeaponBtn.setStyleSheet(
+            f"text-align: left; padding: 3px 10px; margin: 4px 10px 4px 10px;")
+        addWeaponBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        addWeaponBtn.clicked.connect(self._startAddWeapon)
+        self._layout.addWidget(addWeaponBtn)
+
+        self._weaponStrLabels: list = []
+        self._weaponKeyBtns:   list = []
+        self._refreshWeaponRows()
 
     def _buildRfSection(self):
         rf = self._settings.get("rapidfire", {})
@@ -249,6 +280,176 @@ class RecoilPanel(Panel):
         self._layout.addWidget(addSlotBtn)
 
         self._refreshSlotRows()
+
+    # ------------------------------------------------------------------
+    # Weapon rows
+    # ------------------------------------------------------------------
+
+    def _refreshWeaponRows(self):
+        while self._weaponLayout.count():
+            item = self._weaponLayout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._weaponStrLabels = []
+        self._weaponKeyBtns   = []
+        for w in self._settings.get("recoil", {}).get("weapons", []):
+            self._addWeaponRow(w)
+
+    def _addWeaponRow(self, w: dict):
+        row = QFrame(self._weaponWidget)
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(0, 1, 0, 1)
+        rl.setSpacing(4)
+
+        keyBtn = QPushButton(_slotKeyLabel(w) if w.get("code") is not None or w.get("type") in ("mouse", "scroll") else "—", row)
+        keyBtn.setFixedWidth(80)
+        keyBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        keyBtn.clicked.connect(lambda _, ww=w, b=keyBtn: self._editWeaponKey(ww, b))
+        rl.addWidget(keyBtn)
+        self._weaponKeyBtns.append(keyBtn)
+
+        minusBtn = QPushButton("−", row)
+        minusBtn.setFixedWidth(22)
+        minusBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        rl.addWidget(minusBtn)
+
+        strLbl = QLabel(f"{w.get('strength_y', 5)}", row)
+        strLbl.setStyleSheet(f"color: {theme.LABEL_FG}; min-width: 24px; qproperty-alignment: AlignCenter;")
+        rl.addWidget(strLbl)
+        self._weaponStrLabels.append(strLbl)
+
+        plusBtn = QPushButton("+", row)
+        plusBtn.setFixedWidth(22)
+        plusBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        rl.addWidget(plusBtn)
+
+        minusBtn.clicked.connect(lambda _, ww=w, lbl=strLbl: self._adjustWeaponStr(ww, lbl, -1))
+        plusBtn.clicked.connect(lambda _, ww=w, lbl=strLbl: self._adjustWeaponStr(ww, lbl, 1))
+
+        delBtn = QPushButton("×", row)
+        delBtn.setFixedWidth(24)
+        delBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        delBtn.setStyleSheet(
+            f"QPushButton {{ color: #ff6666; background-color: {theme.BTN_BG}; border: none; }}"
+            f"QPushButton:hover {{ background-color: {theme.HOVER_BG}; }}")
+        delBtn.clicked.connect(lambda _, ww=w: self._deleteWeapon(ww))
+        rl.addWidget(delBtn)
+
+        rl.addStretch()
+        self._weaponLayout.addWidget(row)
+
+    def _adjustWeaponStr(self, w: dict, lbl: QLabel, delta: int):
+        w["strength_y"] = max(1, min(30, w.get("strength_y", 5) + delta))
+        lbl.setText(str(w["strength_y"]))
+        self._onSettingsChanged(self._settings)
+
+    def _editWeaponKey(self, w: dict, btn: QPushButton):
+        if self._slotCapturing or self._capturing or self._rfTrigCapturing:
+            return
+
+        def callback(result):
+            if not result:
+                return
+            sy = w.get("strength_y", 5)
+            w.clear()
+            w.update(result)
+            w["strength_y"] = sy
+            btn.setText(_slotKeyLabel(w))
+            self._onSettingsChanged(self._settings)
+
+        self._startWeaponCapture("Press weapon key...", callback)
+
+    def _deleteWeapon(self, w: dict):
+        weapons = self._settings.get("recoil", {}).get("weapons", [])
+        try:
+            idx = next(i for i, ww in enumerate(weapons) if ww is w)
+            del weapons[idx]
+        except StopIteration:
+            pass
+        # Clamp engine index if needed — engine does its own bounds check in _activeWeapon()
+        self._refreshWeaponRows()
+        self._onSettingsChanged(self._settings)
+
+    def _startAddWeapon(self):
+        if self._slotCapturing or self._capturing or self._rfTrigCapturing:
+            return
+
+        def callback(result):
+            weapons = self._settings.setdefault("recoil", {}).setdefault("weapons", [])
+            if result:
+                new_w = dict(result)
+                new_w["strength_y"] = 5
+            else:
+                new_w = {"strength_y": 5}
+            weapons.append(new_w)
+            self._refreshWeaponRows()
+            self._onSettingsChanged(self._settings)
+
+        self._startWeaponCapture("Press weapon key (Esc = no key)...", callback)
+
+    def _startWeaponCapture(self, prompt: str, callback):
+        self._slotCapturing       = True
+        self._weaponCapture       = True
+        self._slotCaptureCallback = callback
+        self._slotCaptureResult   = None
+        self._weaponCaptureLabel.setText(prompt)
+        self._weaponCaptureLabel.setVisible(True)
+        self._engine.setSuspendHotkeys(True)
+        threading.Thread(target=self._weaponCaptureThread, daemon=True).start()
+
+    def _weaponCaptureThread(self):
+        inter = interception.Interception()
+        inter.set_filter(inter.is_keyboard, interception.FilterKeyFlag.FILTER_KEY_ALL)
+        inter.set_filter(inter.is_mouse, interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
+        result = None
+        escaped = False
+        try:
+            while result is None and not escaped:
+                idx = inter.await_input(100)
+                if idx is None or idx >= len(inter._devices):
+                    continue
+                device = inter._devices[idx]
+                stroke = device.receive()
+                if stroke is None:
+                    continue
+                device.send(stroke)
+
+                if isinstance(stroke, interception.KeyStroke):
+                    if stroke.flags & interception.KeyFlag.KEY_UP:
+                        if stroke.code == 1:   # ESC = add weapon with no keybind
+                            escaped = True
+                        else:
+                            result = {
+                                "code": stroke.code,
+                                "e0":   bool(stroke.flags & interception.KeyFlag.KEY_E0),
+                            }
+                elif isinstance(stroke, interception.MouseStroke):
+                    if stroke.button_flags & _SCROLL_WHEEL_FLAG:
+                        delta = stroke.button_data
+                        if delta > 32767:
+                            delta -= 65536
+                        result = {"type": "scroll", "direction": "up" if delta > 0 else "down"}
+                    else:
+                        for name, (down_flag, up_flag) in MOUSE_BUTTON_FLAGS.items():
+                            if stroke.button_flags & up_flag:
+                                result = {"type": "mouse", "button": name}
+                                break
+        finally:
+            self._slotCapturing = False
+            self._engine.setSuspendHotkeys(False)
+
+        self._slotCaptureResult = result  # None on Esc = no keybind weapon
+        self._slotCaptureDone.emit()
+
+    @Slot()
+    def _onWeaponCaptureDone(self):
+        self._weaponCaptureLabel.setVisible(False)
+        cb     = self._slotCaptureCallback
+        result = self._slotCaptureResult
+        self._slotCaptureCallback = None
+        self._slotCaptureResult   = None
+        if cb:
+            cb(result)
 
     # ------------------------------------------------------------------
     # Slot rows
@@ -397,6 +598,10 @@ class RecoilPanel(Panel):
 
     @Slot()
     def _onSlotCaptureDone(self):
+        if self._weaponCapture:
+            self._weaponCapture = False
+            self._onWeaponCaptureDone()
+            return
         self._slotCaptureLabel.setVisible(False)
         cb     = self._slotCaptureCallback
         result = self._slotCaptureResult
@@ -413,9 +618,9 @@ class RecoilPanel(Panel):
         # Recoil
         s = settings["recoil"]
         self._settings["recoil"].update(s)
-        self._syRow.set(s["strength_y"])
         self._keybindBtn.setText(theme.comboLabel(s["trigger_keys"]))
         self._humanizeSwitch.set(s.get("humanize", False))
+        self._refreshWeaponRows()
 
         # Rapid fire
         rf = settings.get("rapidfire", {})
@@ -428,15 +633,13 @@ class RecoilPanel(Panel):
         self._refreshSlotRows()
 
     def updateStrength(self, value: int):
-        self._syRow.set(value)
+        idx = self._engine.activeWeaponIdx
+        if idx < len(self._weaponStrLabels):
+            self._weaponStrLabels[idx].setText(str(value))
 
     # ------------------------------------------------------------------
     # Event handlers — Recoil
     # ------------------------------------------------------------------
-
-    def _onSyChange(self):
-        self._settings["recoil"]["strength_y"] = self._syRow.get()
-        self._onSettingsChanged(self._settings)
 
     def _onHumanizeChange(self):
         self._settings["recoil"]["humanize"] = self._humanizeSwitch.get()
@@ -474,6 +677,17 @@ class RecoilPanel(Panel):
         self._statusLabel.setText(text)
         self._statusLabel.setStyleSheet(
             f"color: {color}; font: 8pt 'Segoe UI Variable Display', 'Segoe UI';")
+
+        # Highlight active weapon key button
+        active_idx = self._engine.activeWeaponIdx
+        for i, btn in enumerate(self._weaponKeyBtns):
+            if i == active_idx:
+                btn.setStyleSheet(
+                    f"QPushButton {{ background-color: {theme.ACCENT}; color: #ffffff;"
+                    f" border: none; padding: 2px 4px; font: bold 8pt 'Segoe UI'; }}"
+                    f"QPushButton:hover {{ background-color: {theme.ACCENT}; }}")
+            else:
+                btn.setStyleSheet("")
 
         # RF status
         rf_enabled = self._settings.get("rapidfire", {}).get("enabled", False)

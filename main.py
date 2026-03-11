@@ -53,6 +53,7 @@ def main():
     # Bridge → UI
     bridge.overlayToggled.connect(panel_win.toggleOverlay)
     bridge.recoilToggled.connect(panel_win.onRecoilToggled)
+    bridge.recoilToggled.connect(lambda _: overlay_win.update())
     bridge.strengthChanged.connect(panel_win.onStrengthChanged)
     bridge.strengthChanged.connect(overlay_win.showStrengthIndicator)
     bridge.quitRequested.connect(app.quit)

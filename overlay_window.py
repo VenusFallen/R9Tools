@@ -105,6 +105,7 @@ class OverlayWindow(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self._chVisible:
             self._drawCrosshair(painter)
+            self._drawModuleIndicators(painter)
         if self._siValue is not None:
             self._drawSI(painter)
         painter.end()
@@ -156,6 +157,42 @@ class OverlayWindow(QWidget):
         if has_cross:  draw_cross(fg, thick)
         if has_circle: draw_circle(fg, thick)
         if has_dot:    draw_dot(fg, thick)
+
+    def _drawModuleIndicators(self, painter: QPainter):
+        cs        = self._settings.get("crosshair", {})
+        color     = cs.get("color", "green")
+        fg        = QColor(_COLOR_MAP.get(color, "#00ff00"))
+        bg        = QColor("#000000")
+
+        labels = []
+        if self._settings.get("recoil",    {}).get("enabled", False):
+            labels.append("R")
+        if self._settings.get("rapidfire", {}).get("enabled", False):
+            labels.append("RF")
+        if not labels:
+            return
+
+        cx = self.width()  // 2
+        cy = self.height() // 2
+
+        painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        fm      = painter.fontMetrics()
+        spacing = 8
+        h       = fm.height()
+        widths  = [fm.horizontalAdvance(l) for l in labels]
+        total_w = sum(widths) + spacing * (len(labels) - 1)
+
+        x = cx - total_w // 2
+        y = cy + 30
+
+        for i, label in enumerate(labels):
+            w = widths[i]
+            painter.setPen(bg)
+            for dx, dy in ((-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)):
+                painter.drawText(x+dx, y+dy, w, h, Qt.AlignmentFlag.AlignLeft, label)
+            painter.setPen(fg)
+            painter.drawText(x, y, w, h, Qt.AlignmentFlag.AlignLeft, label)
+            x += w + spacing
 
     def _drawSI(self, painter: QPainter):
         text = str(self._siValue)

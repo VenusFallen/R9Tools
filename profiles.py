@@ -9,11 +9,11 @@ _DEFAULT_SETTINGS = {
     "theme": "Dark",
     "window_filter": "",
     "recoil": {
-        "enabled": False,
+        "enabled":      False,
         "trigger_keys": ["mouse_left"],
-        "strength_y": 5,
-        "interval_ms": 10,
-        "humanize": False,
+        "humanize":     False,
+        "interval_ms":  10,
+        "weapons":      [{"strength_y": 5}],
     },
     "crosshair": {
         "enabled": False,
@@ -96,8 +96,14 @@ def load() -> dict:
 
         # Migrate recoil defaults (backfills humanize, interval_ms, etc. into old profiles)
         profile.setdefault("recoil", copy.deepcopy(_DEFAULT_SETTINGS["recoil"]))
+        rc = profile["recoil"]
+        # Convert old flat strength_y → weapons list
+        if "strength_y" in rc and "weapons" not in rc:
+            rc["weapons"] = [{"strength_y": rc.pop("strength_y")}]
+        elif "strength_y" in rc:
+            rc.pop("strength_y")
         for key, val in _DEFAULT_SETTINGS["recoil"].items():
-            profile["recoil"].setdefault(key, copy.deepcopy(val) if isinstance(val, (dict, list)) else val)
+            rc.setdefault(key, copy.deepcopy(val) if isinstance(val, (dict, list)) else val)
 
         # Migrate rapidfire defaults
         profile.setdefault("rapidfire", copy.deepcopy(_DEFAULT_SETTINGS["rapidfire"]))

@@ -119,6 +119,7 @@ class RecoilEngine:
         self._rfArmed        = False   # True when weapon slot key has been toggled on
         self._rfFireHeld     = False   # True while all RF trigger keys are physically held
         self._rfSuppressing  = False   # True when we have suppressed the fire trigger
+        self._activeWeaponIdx = 0      # index into recoil.weapons list
 
         self._applyThread = threading.Thread(target=self._applyLoop, daemon=True)
         self._listenThread = threading.Thread(target=self._listenLoop, daemon=True)
@@ -164,9 +165,10 @@ class RecoilEngine:
             self._settings       = settings["recoil"]
             self._held.clear()
             self._remapActive.clear()
-            self._rfArmed        = False
-            self._rfFireHeld     = False
-            self._rfSuppressing  = False
+            self._rfArmed         = False
+            self._rfFireHeld      = False
+            self._rfSuppressing   = False
+            self._activeWeaponIdx = 0
 
         # Release any remapped outputs that were held at settings-change time
         for to_input in active_remaps.values():
@@ -194,6 +196,18 @@ class RecoilEngine:
         rf = self._fullSettings.get("rapidfire", {})
         return rf.get("enabled", False) and self._rfArmed
 
+    def _activeWeapon(self) -> dict:
+        """Return active weapon dict. Must be called with self._lock held."""
+        weapons = self._settings.get("weapons", [])
+        if weapons and self._activeWeaponIdx < len(weapons):
+            return weapons[self._activeWeaponIdx]
+        return {"strength_y": 5}
+
+    @property
+    def activeWeaponIdx(self) -> int:
+        with self._lock:
+            return self._activeWeaponIdx
+
     # ------------------------------------------------------------------
     # Apply loop
     # ------------------------------------------------------------------
@@ -201,9 +215,9 @@ class RecoilEngine:
     def _applyLoop(self):
         while self._running:
             with self._lock:
-                enabled  = self._settings["enabled"]
-                sy       = self._settings["strength_y"]
-                humanize = self._settings.get("humanize", False)
+                enabled       = self._settings["enabled"]
+                sy            = self._activeWeapon().get("strength_y", 5)
+                humanize      = self._settings.get("humanize", False)
                 window_filter = self._fullSettings.get("window_filter", "")
 
             if enabled and self.isActive and self.windowMatchesFilter(window_filter):
@@ -319,14 +333,20 @@ class RecoilEngine:
                     rf           = self._fullSettings.get("rapidfire", {})
                     trigger_keys = set(rf.get("trigger_keys", []))
                     slot_keys    = list(rf.get("slot_keys", []))
+                    weaponSlots  = list(self._settings.get("weapons", []))
                     if key in trigger_keys:
                         self._rfFireHeld = False
                         suppress_rf      = self._rfSuppressing
                         self._rfSuppressing = False
-                    # Mouse slot keys: set armed state based on slot's enabled flag
+                    # Mouse slot keys: set RF armed state
                     for sk in slot_keys:
                         if sk.get("type") == "mouse" and sk.get("button") == key:
                             self._rfArmed = sk.get("enabled", True)
+                            break
+                    # Mouse weapon slots: select active weapon
+                    for i, w in enumerate(weaponSlots):
+                        if w.get("type") == "mouse" and w.get("button") == key:
+                            self._activeWeaponIdx = i
                             break
                 if suppress_rf:
                     return True
@@ -338,13 +358,19 @@ class RecoilEngine:
             if delta > 32767:   # interpret uint16 as signed
                 delta -= 65536
             direction = "up" if delta > 0 else "down"
-            # Scroll slot keys: set armed state based on slot's enabled flag
             with self._lock:
-                rf        = self._fullSettings.get("rapidfire", {})
-                slot_keys = list(rf.get("slot_keys", []))
+                rf          = self._fullSettings.get("rapidfire", {})
+                slot_keys   = list(rf.get("slot_keys", []))
+                weaponSlots = list(self._settings.get("weapons", []))
+                # Scroll slot keys: set RF armed state
                 for sk in slot_keys:
                     if sk.get("type") == "scroll" and sk.get("direction") == direction:
                         self._rfArmed = sk.get("enabled", True)
+                        break
+                # Scroll weapon slots: select active weapon
+                for i, w in enumerate(weaponSlots):
+                    if w.get("type") == "scroll" and w.get("direction") == direction:
+                        self._activeWeaponIdx = i
                         break
             return self._tryRemap(("scroll", direction), None, inter)
 
@@ -365,6 +391,7 @@ class RecoilEngine:
             quitBind     = hotkeys.get("quit",                 {"code": 83, "e0": True})
             rf           = self._fullSettings.get("rapidfire", {})
             rfSlotKeys   = list(rf.get("slot_keys", []))
+            weaponSlots  = list(self._settings.get("weapons", []))
 
         if not isKeyUp:
             if stroke.code == strengthDown["code"] and isE0 == strengthDown["e0"]:
@@ -423,6 +450,14 @@ class RecoilEngine:
                 if sk.get("code") == stroke.code and sk.get("e0", False) == isE0:
                     with self._lock:
                         self._rfArmed = sk.get("enabled", True)
+                    return False
+
+        # Recoil weapon slot keys: select active weapon (pass through)
+        for i, w in enumerate(weaponSlots):
+            if w.get("type") not in ("mouse", "scroll") and w.get("code") is not None:
+                if w.get("code") == stroke.code and w.get("e0", False) == isE0:
+                    with self._lock:
+                        self._activeWeaponIdx = i
                     return False
 
         # Non-hotkey key-up: try remap
@@ -606,8 +641,9 @@ class RecoilEngine:
 
     def _applyStrength(self, direction: int):
         with self._lock:
-            self._settings["strength_y"] = max(1, min(30, self._settings["strength_y"] + direction))
-            newStrength = self._settings["strength_y"]
+            weapon = self._activeWeapon()
+            weapon["strength_y"] = max(1, min(30, weapon.get("strength_y", 5) + direction))
+            newStrength = weapon["strength_y"]
         if self._strengthCallback:
             self._strengthCallback(newStrength)
 
