@@ -405,7 +405,6 @@ class RecoilPanel(Panel):
                 stroke = device.receive()
                 if stroke is None:
                     continue
-                device.send(stroke)
 
                 if isinstance(stroke, interception.KeyStroke):
                     if stroke.flags & interception.KeyFlag.KEY_UP:
@@ -564,7 +563,6 @@ class RecoilPanel(Panel):
                 stroke = device.receive()
                 if stroke is None:
                     continue
-                device.send(stroke)
 
                 if isinstance(stroke, interception.KeyStroke):
                     if stroke.flags & interception.KeyFlag.KEY_UP:
@@ -732,8 +730,6 @@ class RecoilPanel(Panel):
                 stroke = device.receive()
                 if stroke is None:
                     continue
-                device.send(stroke)
-
                 if isinstance(stroke, interception.MouseStroke):
                     for key, (downFlag, upFlag) in MOUSE_BUTTON_FLAGS.items():
                         if stroke.button_flags & downFlag:
@@ -806,7 +802,6 @@ class RecoilPanel(Panel):
                 stroke = device.receive()
                 if stroke is None:
                     continue
-                device.send(stroke)
 
                 if isinstance(stroke, interception.MouseStroke):
                     for key, (downFlag, upFlag) in MOUSE_BUTTON_FLAGS.items():

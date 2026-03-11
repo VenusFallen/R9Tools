@@ -517,11 +517,10 @@ class MacrosPanel(Panel):
                 stroke = device.receive()
                 if stroke is None:
                     continue
-                device.send(stroke)
-
                 if not mouse_only and isinstance(stroke, interception.KeyStroke):
                     if stroke.flags & interception.KeyFlag.KEY_UP:
                         result = {
+                            "type": "key",
                             "code": stroke.code,
                             "e0":   bool(stroke.flags & interception.KeyFlag.KEY_E0),
                         }

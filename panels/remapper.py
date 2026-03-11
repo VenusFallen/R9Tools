@@ -279,7 +279,6 @@ class RemapperPanel(Panel):
                 stroke = device.receive()
                 if stroke is None:
                     continue
-                device.send(stroke)
 
                 if isinstance(stroke, interception.KeyStroke):
                     if stroke.flags & interception.KeyFlag.KEY_UP:
