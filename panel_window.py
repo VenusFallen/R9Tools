@@ -279,6 +279,10 @@ class PanelWindow(QWidget):
         else:
             self._panelCollapsed = False
             self._selectTab(index)
+            if not self.isVisible():
+                self.show()
+                self.raise_()
+                self.activateWindow()
 
     def _shiftTab(self, direction: int):
         indices = sorted(self._panels.keys())
