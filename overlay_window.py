@@ -101,7 +101,6 @@ class OverlayWindow(QWidget):
         cx  = _OVERLAY_SIZE // 2
         cy  = _OVERLAY_SIZE // 2
         rgn = QRegion()
-        pad = 2  # extra pixels per element to absorb antialiasing fringe
 
         if self._chVisible:
             cs      = self._settings.get("crosshair", {})
@@ -116,8 +115,8 @@ class OverlayWindow(QWidget):
             has_circle = style in ("circle", "circle_dot")
 
             total_pen = thick + outline * 2   # pen width used for the outline pass
-            half_t    = total_pen // 2 + pad  # half-thickness of crosshair arms
-            arm_ext   = size + outline + pad  # arm length from the gap edge
+            half_t    = total_pen // 2 + 1    # +1 for sub-pixel rounding headroom
+            arm_ext   = size + outline + 1
 
             if has_cross:
                 rgn |= QRegion(cx - gap - arm_ext, cy - half_t, arm_ext, half_t * 2)  # left
@@ -126,13 +125,13 @@ class OverlayWindow(QWidget):
                 rgn |= QRegion(cx - half_t, cy + gap,           half_t * 2, arm_ext)  # bottom
 
             if has_dot:
-                r = thick + outline + pad
+                r = thick // 2 + outline + 1
                 rgn |= QRegion(cx - r, cy - r, r * 2, r * 2,
                                QRegion.RegionType.Ellipse)
 
             if has_circle:
-                outer_r = size + total_pen // 2 + pad
-                inner_r = max(0, size - total_pen // 2 - pad)
+                outer_r = size + total_pen // 2 + 1
+                inner_r = max(0, size - total_pen // 2 - 1)
                 outer   = QRegion(cx - outer_r, cy - outer_r,
                                   outer_r * 2, outer_r * 2,
                                   QRegion.RegionType.Ellipse)
