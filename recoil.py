@@ -159,6 +159,9 @@ class RecoilEngine:
 
     def stop(self):
         self._running = False
+        self._applyThread.join(timeout=1.0)
+        self._listenThread.join(timeout=1.0)
+        self._rfThread.join(timeout=1.0)
 
     def updateSettings(self, settings: dict):
         with self._lock:

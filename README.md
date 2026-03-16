@@ -176,5 +176,7 @@ python main.py
 ## Notes
 
 - **`psutil` and `pywin32`** are required for the Window Filter feature (used by both Crosshair and Button Remapper). Both modules will still function without them, but window-specific filtering will be unavailable.
+- **Interception driver lifecycle** — R9Tools automatically starts the Interception kernel driver (`keyboard_filter`, `mouse_filter`) on launch and stops it on clean exit. This means the driver is only loaded while the program is running, reducing its footprint when R9Tools is not in use. If the process is force-killed (e.g. via Task Manager), the driver will remain loaded until the next clean launch.
+- **Anti-cheat compatibility** — R9Tools is **not compatible** with games protected by kernel-level anti-cheat (Easy Anti-Cheat, BattlEye). The Interception driver is a kernel filter driver and will be visible to these systems. Do not run R9Tools alongside games that use kernel anti-cheat. VAC (Steam) is userspace-only and is generally unaffected.
 - **Antivirus false positives** — Windows Defender and other AV tools may flag this application due to the Interception kernel driver. The driver operates at the kernel level for input filtering only; this is a known false positive for Interception-based tools. You can submit the driver for analysis at [Microsoft's security portal](https://www.microsoft.com/en-us/wdsi/filesubmission) if needed.
 - **Antivirus false positives** may also flag the pre-built EXE for the same reason as the driver.
