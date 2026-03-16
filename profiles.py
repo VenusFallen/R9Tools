@@ -5,6 +5,17 @@ import copy
 PROFILES_FILE = os.path.join(os.path.dirname(__file__), "profiles.json")
 DEFAULT_NAME = "Default"
 
+# ---------------------------------------------------------------------------
+# Sanitization constants
+# ---------------------------------------------------------------------------
+
+_VALID_CROSSHAIR_STYLES = {"dot", "cross", "dot_cross", "circle", "circle_dot"}
+_VALID_MACRO_MODES      = {"once", "hold", "toggle"}
+_VALID_MACRO_ACTIONS    = {"key_tap", "key_down", "key_up",
+                           "mouse_click", "mouse_down", "mouse_up", "delay"}
+_VALID_MOUSE_BUTTONS    = {"mouse_left", "mouse_right", "mouse_middle",
+                           "mouse_x1", "mouse_x2"}
+
 _DEFAULT_SETTINGS = {
     "theme": "Dark",
     "window_filter": "",
@@ -51,6 +62,104 @@ _EMPTY = {
         DEFAULT_NAME: copy.deepcopy(_DEFAULT_SETTINGS)
     }
 }
+
+
+def _clamp_int(val, lo, hi, default):
+    try:
+        return max(lo, min(hi, int(val)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _sanitize_profile(profile: dict) -> None:
+    """Clamp and validate all profile values in place.
+    Defends against corrupted or hand-crafted profiles.json entries."""
+
+    # Recoil
+    rc = profile.get("recoil", {})
+    rc["enabled"]     = bool(rc.get("enabled", False))
+    rc["humanize"]    = bool(rc.get("humanize", False))
+    rc["interval_ms"] = _clamp_int(rc.get("interval_ms", 10), 1, 1000, 10)
+    if not isinstance(rc.get("weapons"), list):
+        rc["weapons"] = [{"strength_y": 5}]
+    clean_weapons = []
+    for w in rc["weapons"]:
+        if not isinstance(w, dict):
+            continue
+        w["strength_y"] = _clamp_int(w.get("strength_y", 5), 1, 30, 5)
+        clean_weapons.append(w)
+    if not clean_weapons:
+        clean_weapons = [{"strength_y": 5}]
+    rc["weapons"] = clean_weapons
+
+    # Crosshair
+    ch = profile.get("crosshair", {})
+    ch["enabled"] = bool(ch.get("enabled", False))
+    if ch.get("style") not in _VALID_CROSSHAIR_STYLES:
+        ch["style"] = "cross"
+    ch["size"]         = _clamp_int(ch.get("size", 10),        1,  100, 10)
+    ch["thickness"]    = _clamp_int(ch.get("thickness", 2),    1,   20,  2)
+    ch["gap"]          = _clamp_int(ch.get("gap", 3),          0,   50,  3)
+    ch["outline_size"] = _clamp_int(ch.get("outline_size", 1), 0,   10,  1)
+
+    # Hotkeys — each value must be {"code": 0-255, "e0": bool}
+    hk = profile.get("hotkeys", {})
+    for key in list(hk):
+        bind = hk[key]
+        if not isinstance(bind, dict):
+            hk[key] = {"code": 0, "e0": False}
+            continue
+        code = bind.get("code", 0)
+        if not isinstance(code, int) or not (0 <= code <= 255):
+            bind["code"] = 0
+        bind["e0"] = bool(bind.get("e0", False))
+
+    # Remapper
+    rm = profile.get("remapper", {})
+    rm["enabled"] = bool(rm.get("enabled", False))
+    if not isinstance(rm.get("mappings"), list):
+        rm["mappings"] = []
+
+    # Rapid fire
+    rf = profile.get("rapidfire", {})
+    rf["enabled"]     = bool(rf.get("enabled", False))
+    rf["humanize"]    = bool(rf.get("humanize", False))
+    rf["interval_ms"] = _clamp_int(rf.get("interval_ms", 100), 1, 10000, 100)
+
+    # Macros
+    if not isinstance(profile.get("macros"), list):
+        profile["macros"] = []
+    clean_macros = []
+    for macro in profile["macros"]:
+        if not isinstance(macro, dict):
+            continue
+        macro["name"]     = str(macro.get("name", "Macro"))[:64]
+        macro["enabled"]  = bool(macro.get("enabled", True))
+        macro["humanize"] = bool(macro.get("humanize", False))
+        if macro.get("mode") not in _VALID_MACRO_MODES:
+            macro["mode"] = "once"
+        if not isinstance(macro.get("actions"), list):
+            macro["actions"] = []
+        clean_actions = []
+        for a in macro["actions"][:500]:  # hard cap — prevents runaway execution
+            if not isinstance(a, dict):
+                continue
+            if a.get("type") not in _VALID_MACRO_ACTIONS:
+                continue
+            if a["type"] == "delay":
+                a["ms"] = _clamp_int(a.get("ms", 50), 1, 60000, 50)
+            elif a["type"] in ("key_tap", "key_down", "key_up"):
+                code = a.get("code", 0)
+                if not isinstance(code, int) or not (0 <= code <= 255):
+                    continue
+                a["e0"] = bool(a.get("e0", False))
+            elif a["type"] in ("mouse_click", "mouse_down", "mouse_up"):
+                if a.get("button") not in _VALID_MOUSE_BUTTONS:
+                    continue
+            clean_actions.append(a)
+        macro["actions"] = clean_actions
+        clean_macros.append(macro)
+    profile["macros"] = clean_macros
 
 
 def load() -> dict:
@@ -138,6 +247,9 @@ def load() -> dict:
         # Migrate macros (new in V0.4.0 — backfill empty list)
         profile.setdefault("macros", [])
 
+        # Sanitize all values — clamp ranges, validate enums, strip bad action types
+        _sanitize_profile(profile)
+
     return data
 
 
@@ -164,6 +276,8 @@ def loadProfile(data: dict, name: str) -> dict | None:
     settings.setdefault("rapidfire", copy.deepcopy(_DEFAULT_SETTINGS["rapidfire"]))
     settings["rapidfire"]["enabled"] = False
     settings.setdefault("macros", [])
+    for macro in settings["macros"]:
+        macro["enabled"] = False
     save(data)
     return settings
 

@@ -490,6 +490,8 @@ class MacrosPanel(Panel):
     # ------------------------------------------------------------------
 
     def _startCapture(self, prompt: str, callback, keyboard_only=True, mouse_only=False):
+        if self._capturing:
+            return
         self._capturing       = True
         self._captureCallback = callback
         if prompt:

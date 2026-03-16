@@ -3,9 +3,24 @@ R9Tools - Gaming Accessibility Toolkit
 Run as administrator (required for Interception driver).
 """
 import sys
+import subprocess
 
 from PySide6.QtCore import qInstallMessageHandler, QtMsgType
 from PySide6.QtWidgets import QApplication
+
+# Interception kernel filter driver service names
+_INTERCEPTION_SERVICES = ["keyboard_filter", "mouse_filter"]
+
+
+def _interception_driver(start: bool) -> None:
+    """Start or stop the Interception kernel filter driver services.
+    Requires administrator privileges (enforced by the OS)."""
+    action = "start" if start else "stop"
+    for svc in _INTERCEPTION_SERVICES:
+        subprocess.run(
+            ["sc", action, svc],
+            capture_output=True,   # suppress console output
+        )
 
 import profiles as prof
 from recoil        import RecoilEngine
@@ -27,6 +42,7 @@ def _qt_message_filter(msg_type, _context, msg):
 
 
 def main():
+    _interception_driver(start=True)
     qInstallMessageHandler(_qt_message_filter)
     app = QApplication(sys.argv)
 
@@ -46,7 +62,7 @@ def main():
     def onSettingsChanged(updated: dict):
         engine.updateSettings(updated)
         macro_engine.updateSettings(updated)
-        overlay_win.update()   # repaint crosshair when settings change
+        overlay_win.refresh()  # recompute mask + repaint when settings change
 
     # Signal bridge — lives on the main thread; engine stores .emit references.
     # Cross-thread emissions are automatically delivered via QueuedConnection.
@@ -57,7 +73,7 @@ def main():
     # Bridge → UI
     bridge.overlayToggled.connect(panel_win.toggleOverlay)
     bridge.recoilToggled.connect(panel_win.onRecoilToggled)
-    bridge.recoilToggled.connect(lambda _: overlay_win.update())
+    bridge.recoilToggled.connect(lambda _: overlay_win.refresh())
     bridge.strengthChanged.connect(panel_win.onStrengthChanged)
     bridge.strengthChanged.connect(overlay_win.showStrengthIndicator)
     bridge.quitRequested.connect(app.quit)
@@ -70,13 +86,14 @@ def main():
 
     engine.start()
 
-    overlay_win.show()   # always visible — hosts crosshair + strength indicator
+    # overlay_win starts hidden; _refreshMask() shows it on demand and applies WS_EX_TRANSPARENT via showEvent
     # panel_win starts hidden; overlay hotkey shows/hides it
 
     app.exec()
 
     engine.stop()
     macro_engine.stop()
+    _interception_driver(start=False)
 
 
 if __name__ == "__main__":

@@ -208,6 +208,8 @@ class MacroEngine:
     def _recordStroke(self, stroke, is_keyboard: bool, is_e0: bool):
         now = time.monotonic()
         with self._lock:
+            if not self._recording:
+                return
             t = now - self._recordStart
             if is_keyboard and isinstance(stroke, interception.KeyStroke):
                 is_up = bool(stroke.flags & interception.KeyFlag.KEY_UP)
@@ -269,6 +271,7 @@ class MacroEngine:
                     if not held or self._cancelEvent.is_set():
                         break
                     self._executeActions(actions, humanize)
+                    time.sleep(0.001)  # yield to OS; prevents tight spin if no delays in actions
 
             elif mode == "toggle":
                 while True:
@@ -277,6 +280,7 @@ class MacroEngine:
                     if not running or self._cancelEvent.is_set():
                         break
                     self._executeActions(actions, humanize)
+                    time.sleep(0.001)  # yield to OS; prevents tight spin if no delays in actions
                 with self._lock:
                     self._toggleRunning = False
 
@@ -309,7 +313,9 @@ class MacroEngine:
     def _sendKey(self, action: dict, action_type: str):
         if not self._kbDevice:
             return
-        code    = action.get("code", 0)
+        code = action.get("code", 0)
+        if not isinstance(code, int) or not (0 < code <= 255):
+            return
         e0      = action.get("e0", False)
         e0_flag = interception.KeyFlag.KEY_E0 if e0 else 0
         try:
@@ -352,3 +358,4 @@ class MacroEngine:
         self._running = False
         self._cancelEvent.set()
         self._playEvent.set()
+        self._playThread.join(timeout=1.0)
