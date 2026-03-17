@@ -23,11 +23,13 @@ def _interception_driver(start: bool) -> None:
         )
 
 import profiles as prof
-from recoil        import RecoilEngine
-from macro_engine  import MacroEngine
-from bridge        import UIBridge
+from recoil         import RecoilEngine
+from macro_engine   import MacroEngine
+from bridge         import UIBridge
 from overlay_window import OverlayWindow
-from panel_window  import PanelWindow
+from stats_poller   import StatsPoller
+from stats_overlay  import StatsOverlayWindow
+from panel_window   import PanelWindow
 
 
 def _qt_message_filter(msg_type, _context, msg):
@@ -51,18 +53,23 @@ def main():
     cfg["recoil"]["enabled"]    = False   # always start disabled
     cfg["crosshair"]["enabled"] = False
     cfg["remapper"]["enabled"]  = False
+    cfg.setdefault("stats", {})["enabled"] = False
 
     engine       = RecoilEngine(cfg)
     macro_engine = MacroEngine(cfg)
     engine.setMacroEngine(macro_engine)
 
-    # Overlay needs cfg + engine before onSettingsChanged is defined
-    overlay_win = OverlayWindow(cfg, engine)
+    # Overlays need cfg before onSettingsChanged is defined
+    overlay_win   = OverlayWindow(cfg, engine)
+    stats_overlay = StatsOverlayWindow(cfg)
+    stats_poller  = StatsPoller(cfg)
 
     def onSettingsChanged(updated: dict):
         engine.updateSettings(updated)
         macro_engine.updateSettings(updated)
-        overlay_win.refresh()  # recompute mask + repaint when settings change
+        stats_poller.updateSettings(updated)
+        overlay_win.refresh()
+        stats_overlay.applySettings()
 
     # Signal bridge — lives on the main thread; engine stores .emit references.
     # Cross-thread emissions are automatically delivered via QueuedConnection.
@@ -76,6 +83,7 @@ def main():
     bridge.recoilToggled.connect(lambda _: overlay_win.refresh())
     bridge.strengthChanged.connect(panel_win.onStrengthChanged)
     bridge.strengthChanged.connect(overlay_win.showStrengthIndicator)
+    bridge.statsUpdated.connect(stats_overlay.updateStats)
     bridge.quitRequested.connect(app.quit)
 
     # Engine → bridge (interception thread calls these directly)
@@ -84,15 +92,20 @@ def main():
     engine.setStrengthCallback(bridge.strengthChanged.emit)
     engine.setQuitCallback(bridge.quitRequested.emit)
 
-    engine.start()
+    # StatsPoller → bridge (poller thread → main thread via QueuedConnection)
+    stats_poller.setCallback(bridge.statsUpdated.emit)
 
-    # overlay_win starts hidden; _refreshMask() shows it on demand and applies WS_EX_TRANSPARENT via showEvent
+    engine.start()
+    stats_poller.start()
+
+    # overlay_win and stats_overlay start hidden; shown on demand
     # panel_win starts hidden; overlay hotkey shows/hides it
 
     app.exec()
 
     engine.stop()
     macro_engine.stop()
+    stats_poller.stop()
     _interception_driver(start=False)
 
 

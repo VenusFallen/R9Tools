@@ -13,4 +13,5 @@ class UIBridge(QObject):
     overlayToggled  = Signal()      # overlay show/hide hotkey pressed
     recoilToggled   = Signal(bool)  # recoil enabled state changed
     strengthChanged = Signal(int)   # recoil strength value changed
+    statsUpdated    = Signal(dict)  # new hardware stats from StatsPoller
     quitRequested   = Signal()      # quit hotkey pressed

@@ -33,3 +33,7 @@ assets/
 
 # Inno Setup script
 *.iss
+
+# LHM DLLs and runtime files (downloaded via auto-updater or manually)
+lib/*.dll
+lib/lhm_version.txt

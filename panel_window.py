@@ -22,13 +22,15 @@ from panels.remapper  import RemapperPanel
 from panels.profiles  import ProfilesPanel
 from panels.settings  import SettingsPanel
 from panels.macros    import MacrosPanel
+from panels.stats     import StatsPanel
 
 _TAB_RECOIL    = 0
 _TAB_CROSSHAIR = 1
 _TAB_REMAPPER  = 2
 _TAB_MACROS    = 3
-_TAB_PROFILES  = 4
-_TAB_SETTINGS  = 5
+_TAB_STATS     = 4
+_TAB_PROFILES  = 5
+_TAB_SETTINGS  = 6
 
 _WIN_FLAGS = (
     Qt.WindowType.FramelessWindowHint
@@ -82,7 +84,8 @@ class _TopBarWindow(QWidget):
         for label, index in [("WEAPON",    _TAB_RECOIL),
                               ("CROSSHAIR", _TAB_CROSSHAIR),
                               ("REMAPPER",  _TAB_REMAPPER),
-                              ("MACROS",    _TAB_MACROS)]:
+                              ("MACROS",    _TAB_MACROS),
+                              ("STATS",     _TAB_STATS)]:
             self._barLayout.addWidget(self._makeTabButton(label, index))
 
         self._barLayout.addStretch()
@@ -259,6 +262,7 @@ class PanelWindow(QWidget):
         self._crosshairPanel = CrosshairPanel(None, self._settings, self._engine, onChanged)
         self._remapperPanel  = RemapperPanel(None, self._settings, onChanged)
         self._macrosPanel    = MacrosPanel(None, self._settings, self._macroEngine, onChanged)
+        self._statsPanel     = StatsPanel(None, self._settings, onChanged)
         self._profilesPanel  = ProfilesPanel(
             None, self._profileData,
             onLoad=self._onProfileLoad,
@@ -274,6 +278,7 @@ class PanelWindow(QWidget):
             _TAB_CROSSHAIR: self._crosshairPanel,
             _TAB_REMAPPER:  self._remapperPanel,
             _TAB_MACROS:    self._macrosPanel,
+            _TAB_STATS:     self._statsPanel,
             _TAB_PROFILES:  self._profilesPanel,
             _TAB_SETTINGS:  self._settingsPanel,
         }
@@ -442,6 +447,7 @@ class PanelWindow(QWidget):
         self._crosshairPanel.reload(self._settings)
         self._remapperPanel.reload(self._settings)
         self._macrosPanel.reload(self._settings)
+        self._statsPanel.reload(self._settings)
         self._settingsPanel.reload(self._settings)
         self._profilesPanel.refreshCombo()
         self.flashBorder(theme.FLASH_LOAD)
@@ -471,4 +477,5 @@ class PanelWindow(QWidget):
                 self._crosshairPanel.reload(self._settings)
                 self._remapperPanel.reload(self._settings)
                 self._macrosPanel.reload(self._settings)
+                self._statsPanel.reload(self._settings)
                 self._settingsPanel.reload(self._settings)

@@ -1,0 +1,16 @@
+Copy ALL DLLs from the LHM zip into this directory to enable the Stats overlay.
+
+Download LHM.zip (not LHM.net10.zip) from:
+  https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases
+
+Required DLLs (copy all .dll files from the zip):
+  LibreHardwareMonitorLib.dll   ← main assembly
+  System.Memory.dll             ← polyfill dependency
+  System.Buffers.dll            ← polyfill dependency
+  System.Numerics.Vectors.dll   ← polyfill dependency
+  System.Runtime.CompilerServices.Unsafe.dll  ← polyfill dependency
+
+Also required (pip install):
+  pip install pythonnet --pre
+
+Run R9Tools as Administrator — LHM requires elevated privileges to read hardware sensors.
