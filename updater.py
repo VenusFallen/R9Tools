@@ -180,19 +180,19 @@ def _is_net10_zip(name: str) -> bool:
 def _compatible_zip(assets: list) -> dict | None:
     """
     From a list of release assets pick the best compatible (non-.NET 10) zip.
-    If ANY asset in the release is explicitly named net10, the whole release
-    targets .NET 10 (the plain zip is also net10), so return None.
+    Filters out any explicitly net10-named zips, then picks the best remaining.
     Priority: net8 explicit > net472/netfx > plain zip (no version suffix).
+    Returns None if no compatible zip exists.
     """
     zips = [a for a in assets if a.get("name", "").lower().endswith(".zip")]
-    # If ANY zip is explicitly net10, the entire release requires .NET 10
-    if any(_is_net10_zip(a["name"]) for a in zips):
+    compatible = [a for a in zips if not _is_net10_zip(a["name"])]
+    if not compatible:
         return None
     for priority in ("net8", "net472", "netfx"):
-        for a in zips:
+        for a in compatible:
             if priority in a["name"].lower():
                 return a
-    return zips[0] if zips else None
+    return compatible[0]
 
 
 def download_lhm(progress_cb=None) -> str:
