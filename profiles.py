@@ -54,6 +54,19 @@ _DEFAULT_SETTINGS = {
         "humanize":     False,
     },
     "macros": [],
+    "stats": {
+        "enabled":        False,
+        "corner":         "top_right",
+        "update_rate_hz": 1,
+        "show_cpu_usage": True,
+        "show_cpu_temp":  True,
+        "show_gpu_usage": True,
+        "show_gpu_temp":  True,
+        "show_gpu_vram":  True,
+        "show_ram":       True,
+        "bg_alpha":       70,
+        "text_color":     "#ffffff",
+    },
 }
 
 _EMPTY = {
@@ -125,6 +138,22 @@ def _sanitize_profile(profile: dict) -> None:
     rf["enabled"]     = bool(rf.get("enabled", False))
     rf["humanize"]    = bool(rf.get("humanize", False))
     rf["interval_ms"] = _clamp_int(rf.get("interval_ms", 100), 1, 10000, 100)
+
+    # Stats
+    st = profile.get("stats", {})
+    st["enabled"]        = bool(st.get("enabled", False))
+    st["update_rate_hz"] = _clamp_int(st.get("update_rate_hz", 1), 1, 5, 1)
+    _VALID_CORNERS = {"top_left", "top_right", "middle_left", "middle_right",
+                      "bottom_left", "bottom_right"}
+    if st.get("corner") not in _VALID_CORNERS:
+        st["corner"] = "top_right"
+    for metric in ("show_cpu_usage", "show_cpu_temp", "show_gpu_usage",
+                   "show_gpu_temp", "show_gpu_vram", "show_ram"):
+        st[metric] = bool(st.get(metric, True))
+    st["bg_alpha"] = _clamp_int(st.get("bg_alpha", 70), 0, 100, 70)
+    _VALID_TEXT_COLORS = {"#ffffff", "#ffff00", "#00ffff", "#00ff00", "#ff8c00", "#ff4444"}
+    if st.get("text_color") not in _VALID_TEXT_COLORS:
+        st["text_color"] = "#ffffff"
 
     # Macros
     if not isinstance(profile.get("macros"), list):
@@ -247,6 +276,12 @@ def load() -> dict:
         # Migrate macros (new in V0.4.0 — backfill empty list)
         profile.setdefault("macros", [])
 
+        # Migrate stats (new in V0.5.0 — backfill defaults)
+        profile.setdefault("stats", copy.deepcopy(_DEFAULT_SETTINGS["stats"]))
+        st = profile["stats"]
+        for key, val in _DEFAULT_SETTINGS["stats"].items():
+            st.setdefault(key, val)
+
         # Sanitize all values — clamp ranges, validate enums, strip bad action types
         _sanitize_profile(profile)
 
@@ -273,6 +308,8 @@ def loadProfile(data: dict, name: str) -> dict | None:
     settings["recoil"]["enabled"]    = False
     settings["crosshair"]["enabled"] = False
     settings["remapper"]["enabled"]  = False
+    settings.setdefault("stats", copy.deepcopy(_DEFAULT_SETTINGS["stats"]))
+    settings["stats"]["enabled"]     = False
     settings.setdefault("rapidfire", copy.deepcopy(_DEFAULT_SETTINGS["rapidfire"]))
     settings["rapidfire"]["enabled"] = False
     settings.setdefault("macros", [])

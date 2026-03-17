@@ -71,6 +71,31 @@ When a **Window Filter** is set in Settings, remapping only fires while that win
 
 ---
 
+### Stats Overlay
+
+Displays a small always-on-top, click-through hardware stats overlay in any corner of the screen. Powered by [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor).
+
+**Metrics (each individually toggleable):**
+
+- CPU usage % and temperature °C (shown on one line when both enabled)
+- GPU usage % and temperature °C (shown on one line when both enabled)
+- GPU VRAM used / total (GB)
+- RAM used / total (GB)
+
+**Configuration:**
+
+- **Position** — place the overlay in any of 6 corners: top, middle, or bottom on either side
+- **Update Rate** — 1–5 Hz
+- **Opacity** — background alpha from 0–100%; text remains fully opaque at all times
+- **Text Color** — six presets: White, Yellow, Cyan, Green, Orange, Red
+- The overlay renders with rounded corners and a drop shadow that scales with the background opacity
+
+The overlay requires `LibreHardwareMonitorLib.dll` in the `lib/` folder next to the executable. If it is not present, the Stats panel will show a notice and no data will be displayed. Use the **Check for Updates** button in Settings to download the DLL automatically.
+
+> Stats are collected on a background thread and do not affect overlay or input performance.
+
+---
+
 ### Profiles
 
 Save, load, and delete named configurations. All module settings are stored per-profile, making it easy to maintain separate setups per game.
@@ -78,7 +103,7 @@ Save, load, and delete named configurations. All module settings are stored per-
 - Select a profile from the dropdown, then click **Apply** to load it
 - Use **Save** next to the dropdown to overwrite the current profile, or enter a new name and click **Save** to create one
 - A protected **Default** profile is always available and cannot be deleted or overwritten
-- Loading a profile always starts with recoil, crosshair, remapper, and rapid fire disabled
+- Loading a profile always starts with recoil, crosshair, remapper, rapid fire, stats, and all macros disabled
 - The top bar flashes to confirm saves (green), loads (blue), and deletes (red)
 
 ---
@@ -100,6 +125,13 @@ Program-wide configuration accessible from the right side of the top bar.
 | Recoil Toggle | F10 |
 | Recoil Strength − | `[` |
 | Recoil Strength + | `]` |
+
+**Updates** — check for and apply updates from within the app:
+
+- **R9Tools** — checks the GitHub releases page for a newer version of the executable. Downloads and replaces the running exe; restart to apply.
+- **LibreHardwareMonitor** — checks for a newer compatible LHM release and stages the updated DLLs. Changes take effect on the next launch.
+
+> Updates only work in the packaged `.exe` build. Running from source requires manual updates.
 
 ---
 
@@ -144,6 +176,8 @@ Download `R9Tools_vX.X.X.zip` from the [Releases](https://github.com/VenusFallen
 
 Reboot after installation, then launch R9Tools as **Administrator**.
 
+To enable the Stats Overlay, open the **Settings** tab and click **Check for Updates** under LibreHardwareMonitor. The DLL will be downloaded and applied automatically on next launch.
+
 ### Option B — Run from source
 
 **Requirements:**
@@ -160,10 +194,12 @@ Reboot after installation, then launch R9Tools as **Administrator**.
 3. Install Python dependencies:
 
 ```bash
-pip install PySide6 interception-python psutil pywin32
+pip install PySide6 interception-python psutil pywin32 pythonnet
 ```
 
-1. Run as **administrator**:
+4. Download `LibreHardwareMonitorLib.dll` from the [LibreHardwareMonitor releases](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases) page and place it in a `lib/` folder next to `main.py` (required for the Stats Overlay)
+
+5. Run as **administrator**:
 
 ```bash
 python main.py
@@ -176,6 +212,7 @@ python main.py
 ## Notes
 
 - **`psutil` and `pywin32`** are required for the Window Filter feature (used by both Crosshair and Button Remapper). Both modules will still function without them, but window-specific filtering will be unavailable.
+- **`pythonnet`** is required for the Stats Overlay. If not installed, the Stats panel will show a notice and no data will be displayed. Not needed for any other feature.
 - **Interception driver lifecycle** — R9Tools automatically starts the Interception kernel driver (`keyboard_filter`, `mouse_filter`) on launch and stops it on clean exit. This means the driver is only loaded while the program is running, reducing its footprint when R9Tools is not in use. If the process is force-killed (e.g. via Task Manager), the driver will remain loaded until the next clean launch.
 - **Anti-cheat compatibility** — R9Tools is **not compatible** with games protected by kernel-level anti-cheat (Easy Anti-Cheat, BattlEye). The Interception driver is a kernel filter driver and will be visible to these systems. Do not run R9Tools alongside games that use kernel anti-cheat. VAC (Steam) is userspace-only and is generally unaffected.
 - **Antivirus false positives** — Windows Defender and other AV tools may flag this application due to the Interception kernel driver. The driver operates at the kernel level for input filtering only; this is a known false positive for Interception-based tools. You can submit the driver for analysis at [Microsoft's security portal](https://www.microsoft.com/en-us/wdsi/filesubmission) if needed.
