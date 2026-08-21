@@ -77,6 +77,18 @@ class MacroEngine:
         with self._lock:
             self._fullSettings = settings
 
+    @property
+    def isRecording(self) -> bool:
+        """Used by RecoilEngine's remap-synthesized feedback path to skip
+        feeding a synthesized (non-physical) stroke into handleStroke()
+        while a macro recording is in progress — recording should only ever
+        capture the real physical source stroke (already fed to
+        handleStroke() unconditionally from the listen loop), not also the
+        remapped-TO stroke synthesized from it, which would otherwise
+        double up every recorded remapped key-press into two actions."""
+        with self._lock:
+            return self._recording
+
     def handleStroke(self, stroke, is_keyboard: bool, is_e0: bool = False) -> bool:
         """
         Called from interception thread on every stroke.

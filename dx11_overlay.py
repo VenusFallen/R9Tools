@@ -26,6 +26,7 @@ Architecture:
 """
 import ctypes
 import ctypes.wintypes as wintypes
+import logging
 import threading
 import time
 import math
@@ -51,6 +52,7 @@ _WS_EX_NOREDIRECTIONBITMAP = 0x00200000  # no GDI surface — DComp owns the con
 
 _WM_DESTROY        = 0x0002
 _WM_SIZE           = 0x0005
+_WM_DISPLAYCHANGE  = 0x007E
 
 _PM_REMOVE         = 0x0001
 
@@ -172,7 +174,8 @@ class DX11Overlay:
         self._settings   = settings
         self._engine     = engine
 
-        self._ch_visible = False
+        self._ch_visible  = False
+        self._ind_visible = False
         self._si_value   = None
         self._si_until   = 0.0
 
@@ -213,13 +216,20 @@ class DX11Overlay:
             self._thread.join(timeout=3.0)
 
     def refresh(self):
-        """Re-evaluate crosshair visibility (settings + window filter)."""
+        """Re-evaluate crosshair + module-indicator visibility (settings + window filter)."""
+        wf = self._settings.get("window_filter", "")
+
         cs = self._settings.get("crosshair", {})
         if not cs.get("enabled", False):
             self._ch_visible = False
-            return
-        wf = self._settings.get("window_filter", "")
-        self._ch_visible = True if not wf else self._engine.windowMatchesFilter(wf)
+        else:
+            self._ch_visible = True if not wf else self._engine.windowMatchesFilter(wf)
+
+        ind = self._settings.get("indicator", {})
+        if not ind.get("enabled", True):
+            self._ind_visible = False
+        else:
+            self._ind_visible = True if not wf else self._engine.windowMatchesFilter(wf)
 
     def update_stats(self, data: dict):
         with self._stats_lock:
@@ -241,6 +251,7 @@ class DX11Overlay:
             self._render_loop()
         except Exception as exc:
             print(f"[DX11Overlay] Fatal: {exc}")
+            logging.exception("[DX11Overlay] Fatal error in render thread")
             self._ready.set()
         finally:
             self._teardown()
@@ -260,6 +271,16 @@ class DX11Overlay:
                 h = (lparam >> 16) & 0xFFFF
                 if w > 0 and h > 0:
                     self._on_resize(w, h)
+            return 0
+        if msg == _WM_DISPLAYCHANGE:
+            # Fired when the display resolution changes while R9Tools is
+            # already running (e.g. a game switching into a custom exclusive-
+            # fullscreen resolution). _create_window() only queried
+            # GetSystemMetrics once at startup, so without this the overlay
+            # window — and every centre-point calc that reads self._sw/_sh
+            # (crosshair, indicators, stats, strength indicator) — would stay
+            # pinned to the stale startup resolution until the app restarts.
+            self._handle_display_change()
             return 0
         return _DefWindowProcW(hwnd, msg, wparam, lparam)
 
@@ -473,7 +494,9 @@ class DX11Overlay:
             now          = time.monotonic()
             si_active    = self._si_value is not None and now < self._si_until
             stats_active = self._settings.get("stats", {}).get("enabled", False)
-            needs_draw   = self._ch_visible or si_active or stats_active
+            ri_active    = self._settings.get("running_indicator", {}).get("enabled", True)
+            needs_draw   = (self._ch_visible or self._ind_visible
+                            or si_active or stats_active or ri_active)
 
             if needs_draw:
                 _had_content = True
@@ -504,6 +527,7 @@ class DX11Overlay:
 
         if self._ch_visible:
             self._draw_crosshair(r)
+        if self._ind_visible:
             self._draw_module_indicators(r)
 
         # Stats HUD
@@ -512,6 +536,13 @@ class DX11Overlay:
             with self._stats_lock:
                 data = dict(self._stats_data)
             self._draw_stats(r, st, data)
+
+        # "R9Tools is loaded" running indicator — always drawn when enabled,
+        # independent of crosshair, module indicators, and the window filter
+        # (unlike those, this badge is meant to confirm the app is alive
+        # regardless of which window currently has focus).
+        if self._settings.get("running_indicator", {}).get("enabled", True):
+            self._draw_running_indicator(r)
 
         # Strength indicator
         now = time.monotonic()
@@ -581,15 +612,87 @@ class DX11Overlay:
         if not labels:
             return
 
-        text  = "  ".join(labels)
-        cx    = self._sw * 0.5
-        cy    = self._sh * 0.5
-        x     = cx - len(text) * 4   # rough centering
-        y     = cy + 30
+        text = "  ".join(labels)
+
+        ind      = self._settings.get("indicator", {})
+        position = ind.get("position", "below_crosshair")
+
+        font_size = 12
+        text_w    = len(text) * 8   # rough width estimate (~8px/char at 12pt)
+        text_h    = font_size + 4
+
+        # Center-point math shared with crosshair positioning — anchors
+        # above/below-crosshair options to screen-center regardless of
+        # whether the crosshair itself is currently drawn.
+        cx = self._sw * 0.5
+        cy = self._sh * 0.5
+
+        # Corner anchoring mirrors _draw_stats's corner logic.
+        if "left" in position:
+            x = self._MARGIN
+        elif "right" in position:
+            x = self._sw - self._MARGIN - text_w
+        else:
+            x = cx - text_w * 0.5
+
+        if "top" in position:
+            y = self._MARGIN
+        elif "bottom" in position:
+            y = self._sh - self._MARGIN - text_h
+        elif position == "above_crosshair":
+            y = cy - 30 - text_h
+        else:   # below_crosshair (and fallback for unrecognized values)
+            y = cy + 30
 
         # Shadow
-        r.draw_text(text, x + 1, y + 1, _BLACK, font_size=12)
-        r.draw_text(text, x,     y,     fg,     font_size=12)
+        r.draw_text(text, x + 1, y + 1, _BLACK, font_size=font_size)
+        r.draw_text(text, x,     y,     fg,     font_size=font_size)
+
+    # ------------------------------------------------------------------
+    # Running indicator — "R9Tools is loaded" badge
+    # ------------------------------------------------------------------
+
+    def _draw_running_indicator(self, r: Renderer):
+        """Small power-button badge with 'R9' centered inside, fixed to the
+        top-right corner (same _MARGIN convention as the stats HUD / module
+        indicators). Deliberately separate from _draw_module_indicators —
+        this is a standalone "app is alive" status badge, not tied to
+        recoil/rapidfire state."""
+        radius    = 20.0
+        thickness = 2.0
+        pad       = 6.0   # keep the ring's own margin off the screen edge
+
+        cx = self._sw - self._MARGIN - radius - pad
+        cy = self._MARGIN + radius + pad
+
+        fg = _WHITE
+        bg = _BLACK
+
+        # Power-symbol ring: small gap centered on straight-up, plus a short
+        # stick poking up through the gap (draw_arc's 0 deg = 12 o'clock,
+        # clockwise — see dx11_renderer.Renderer.draw_arc).
+        gap_half   = 30.0
+        stick_top  = cy - radius * 1.3
+        stick_base = cy - radius * 0.35
+
+        def draw_icon(col, w):
+            r.draw_arc(cx, cy, radius, gap_half, 360.0 - gap_half, col, thickness=w)
+            r.draw_line(cx, stick_base, cx, stick_top, w, col)
+
+        # Outline pass (readability against bright/busy backgrounds)
+        draw_icon(bg, thickness + 2.0)
+        draw_icon(fg, thickness)
+
+        # "R9" label, centered inside the ring, sitting just below the stick
+        # so the two don't overlap.
+        font_size = 9
+        text      = "R9"
+        text_w, text_h = r.measure_text(text, font_size=font_size, font_face="Segoe UI")
+        tx = cx - text_w * 0.5
+        ty = cy - text_h * 0.5 + radius * 0.28
+
+        r.draw_text(text, tx + 1, ty + 1, bg, font_size=font_size, font_face="Segoe UI")
+        r.draw_text(text, tx,     ty,     fg, font_size=font_size, font_face="Segoe UI")
 
     # ------------------------------------------------------------------
     # Stats HUD
@@ -708,6 +811,20 @@ class DX11Overlay:
     # ------------------------------------------------------------------
     # Resize
     # ------------------------------------------------------------------
+
+    def _handle_display_change(self):
+        """Re-query the (possibly changed) primary-monitor resolution and
+        resize/reposition the window to match. Dropping the SWP_NOMOVE/
+        SWP_NOSIZE flags used elsewhere means this SetWindowPos call actually
+        changes the window's size, which synchronously dispatches a WM_SIZE
+        back into _wnd_proc (same thread) — that's what drives the swap
+        chain/RTV/viewport rebuild via the existing _on_resize() path, so
+        the DX11-side resize work only lives in one place."""
+        sw = _user32.GetSystemMetrics(_SM_CXSCREEN)
+        sh = _user32.GetSystemMetrics(_SM_CYSCREEN)
+        if sw <= 0 or sh <= 0:
+            return
+        _SetWindowPos(self._hwnd, _HWND_TOPMOST, 0, 0, sw, sh, _SWP_NOACTIVATE)
 
     def _on_resize(self, w: int, h: int):
         self._sw = w

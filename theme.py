@@ -400,14 +400,24 @@ class KeybindButton(QWidget):
     }
 
     def __init__(self, parent: QWidget, label: str, binding: dict,
-                 onChange, onCapture=None, keyboard_only: bool = True):
+                 onChange, onCapture=None, keyboard_only: bool = True,
+                 settings: dict = None, exclude_id=None):
         super().__init__(parent)
-        self._binding        = dict(binding)
-        self._onChange       = onChange
-        self._onCapture      = onCapture
-        self._keyboard_only  = keyboard_only
-        self._capturing      = False
-        self._captureSuccess = False
+        self._binding         = dict(binding)
+        self._previousBinding = dict(binding)
+        self._onChange        = onChange
+        self._onCapture       = onCapture
+        self._keyboard_only   = keyboard_only
+        self._capturing       = False
+        self._captureSuccess  = False
+        # Conflict-check wiring — settings is the full app settings dict and
+        # exclude_id is this field's own registry id (see
+        # keybind_conflicts.iterBindingSources), so re-capturing the same
+        # key for the same field isn't reported as a conflict with itself.
+        # When settings is None (no caller has opted in), conflict checking
+        # is skipped entirely and behaviour is unchanged.
+        self._settings   = settings
+        self._exclude_id = exclude_id
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 3, 10, 3)
@@ -427,7 +437,8 @@ class KeybindButton(QWidget):
         self._done.connect(self._finish)
 
     def setBinding(self, binding: dict):
-        self._binding = dict(binding)
+        self._binding         = dict(binding)
+        self._previousBinding = dict(binding)
         self._btn.setText(self._bindingLabel())
 
     # ------------------------------------------------------------------
@@ -448,8 +459,9 @@ class KeybindButton(QWidget):
     def _startCapture(self):
         if self._capturing:
             return
-        self._capturing      = True
-        self._captureSuccess = False
+        self._capturing       = True
+        self._captureSuccess  = False
+        self._previousBinding = dict(self._binding)
         if self._onCapture:
             self._onCapture(True)
         prompt = "Press a key..." if self._keyboard_only else "Press key or button..."
@@ -515,7 +527,38 @@ class KeybindButton(QWidget):
 
     @Slot()
     def _finish(self):
+        if self._captureSuccess and self._settings is not None:
+            from keybind_conflicts import findConflict
+            conflict = findConflict(self._settings, self._binding, self._exclude_id)
+            if conflict:
+                # Hard-block: discard the newly captured binding, revert to
+                # what was bound before this capture, flash why, and
+                # immediately re-arm capture so the user can just press
+                # another key without clicking the button again.
+                self._binding        = self._previousBinding
+                self._captureSuccess = False
+                self._btn.setText(f"Already used: {conflict}")
+                self._btn.setStyleSheet("color: #ff6666;")
+                self._capturing = True
+                if self._onCapture:
+                    self._onCapture(True)
+                threading.Thread(target=self._captureThread, daemon=True).start()
+                QTimer.singleShot(1800, self._revertConflictMessage)
+                return
         self._btn.setText(self._bindingLabel())
         self._btn.setStyleSheet("")
         if self._captureSuccess:
             self._onChange(self._binding)
+
+    def _revertConflictMessage(self):
+        # If the re-armed capture (started right after the conflict) is
+        # still running when this timer fires, show the capture prompt
+        # instead of the bound label — otherwise the button would flash
+        # back to looking "done" while still silently listening for a key.
+        if self._capturing:
+            prompt = "Press a key..." if self._keyboard_only else "Press key or button..."
+            self._btn.setText(prompt)
+            self._btn.setStyleSheet(f"color: {ACTIVE_FG};")
+        else:
+            self._btn.setText(self._bindingLabel())
+            self._btn.setStyleSheet("")

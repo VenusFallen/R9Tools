@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 import theme
+import keybind_conflicts
 from panels.base import Panel
 from recoil import MOUSE_BUTTON_FLAGS, _SCROLL_WHEEL_FLAG, scancodeLabel
 
@@ -20,6 +21,16 @@ _MOUSE_DISPLAY = {
     "mouse_x1":     "Mouse4",
     "mouse_x2":     "Mouse5",
 }
+
+
+def _captureLabelStyleNormal() -> str:
+    return (f"color: {theme.ACTIVE_FG}; font: italic 9pt 'Segoe UI';"
+            f" padding: 0px 10px 2px 10px;")
+
+
+def _captureLabelStyleError() -> str:
+    return ("color: #ff6666; font: italic 9pt 'Segoe UI';"
+            " padding: 0px 10px 2px 10px;")
 
 
 def _slotKeyLabel(sk: dict) -> str:
@@ -77,6 +88,11 @@ class RecoilPanel(Panel):
         self._slotCapturing     = False   # slot key capture
         self._slotCaptureCallback = None
         self._slotCaptureResult   = None
+        # Prompt text/label for the capture currently in progress (weapon
+        # or RF slot) — used to redraw the "still listening" prompt after
+        # a rejection flash message if a re-armed capture is still running.
+        self._activeCapturePrompt = None
+        self._activeCaptureLabel  = None
 
         self._weaponCapture = False   # True when slot capture is for a weapon (not RF slot)
 
@@ -316,7 +332,7 @@ class RecoilPanel(Panel):
         rl.addWidget(keyBtn)
         self._weaponKeyBtns.append(keyBtn)
 
-        pmRow = theme.PlusMinusRow(row, "", w.get("strength_y", 5), 1, 30, lambda: None, label_width=0)
+        pmRow = theme.PlusMinusRow(row, "", w.get("strength_y", 5), 1, 99, lambda: None, label_width=0)
         def _onChange(ww=w, pr=pmRow):
             ww["strength_y"] = pr.get()
             self._onSettingsChanged(self._settings)
@@ -347,9 +363,20 @@ class RecoilPanel(Panel):
     def _editWeaponKey(self, w: dict, btn: QPushButton):
         if self._slotCapturing or self._capturing or self._rfTrigCapturing:
             return
+        prompt = "Press weapon key..."
 
         def callback(result):
             if not result:
+                return
+            conflict = keybind_conflicts.findConflict(
+                self._settings, result, exclude_id=f"weapon:{id(w)}")
+            if conflict:
+                # Re-arm immediately so the very next key press is
+                # captured and checked again, instead of dropping out of
+                # capture mode.
+                self._flashCaptureLabel(
+                    self._weaponCaptureLabel, conflict,
+                    rearm=lambda: self._startWeaponCapture(prompt, callback, reprompt=False))
                 return
             sy = w.get("strength_y", 5)
             w.clear()
@@ -358,7 +385,7 @@ class RecoilPanel(Panel):
             btn.setText(_slotKeyLabel(w))
             self._onSettingsChanged(self._settings)
 
-        self._startWeaponCapture("Press weapon key...", callback)
+        self._startWeaponCapture(prompt, callback)
 
     def _deleteWeapon(self, w: dict):
         weapons = self._settings.get("recoil", {}).get("weapons", [])
@@ -374,27 +401,45 @@ class RecoilPanel(Panel):
     def _startAddWeapon(self):
         if self._slotCapturing or self._capturing or self._rfTrigCapturing:
             return
+        prompt = "Press weapon key (Esc = no key)..."
 
         def callback(result):
-            weapons = self._settings.setdefault("recoil", {}).setdefault("weapons", [])
             if result:
+                conflict = keybind_conflicts.findConflict(self._settings, result)
+                if conflict:
+                    # Re-arm immediately so the very next key press is
+                    # captured and checked again, instead of dropping out
+                    # of capture mode. Esc still works as before once
+                    # re-armed (adds the weapon with no keybind).
+                    self._flashCaptureLabel(
+                        self._weaponCaptureLabel, conflict,
+                        rearm=lambda: self._startWeaponCapture(prompt, callback, reprompt=False))
+                    return
                 new_w = dict(result)
                 new_w["strength_y"] = 5
             else:
                 new_w = {"strength_y": 5}
+            weapons = self._settings.setdefault("recoil", {}).setdefault("weapons", [])
             weapons.append(new_w)
             self._refreshWeaponRows()
             self._onSettingsChanged(self._settings)
 
-        self._startWeaponCapture("Press weapon key (Esc = no key)...", callback)
+        self._startWeaponCapture(prompt, callback)
 
-    def _startWeaponCapture(self, prompt: str, callback):
+    def _startWeaponCapture(self, prompt: str, callback, reprompt: bool = True):
         self._slotCapturing       = True
         self._weaponCapture       = True
+        self._activeCapturePrompt = prompt
+        self._activeCaptureLabel  = self._weaponCaptureLabel
         self._slotCaptureCallback = callback
         self._slotCaptureResult   = None
-        self._weaponCaptureLabel.setText(prompt)
-        self._weaponCaptureLabel.setVisible(True)
+        if reprompt:
+            # Skipped when re-arming right after a rejection flash — the
+            # flash message is already showing and should stay visible for
+            # its full duration instead of being immediately overwritten.
+            self._weaponCaptureLabel.setText(prompt)
+            self._weaponCaptureLabel.setStyleSheet(_captureLabelStyleNormal())
+            self._weaponCaptureLabel.setVisible(True)
         self._engine.setSuspendHotkeys(True)
         threading.Thread(target=self._weaponCaptureThread, daemon=True).start()
 
@@ -506,9 +551,20 @@ class RecoilPanel(Panel):
     def _editSlotKey(self, sk: dict, btn: QPushButton):
         if self._slotCapturing or self._capturing or self._rfTrigCapturing:
             return
+        prompt = "Press slot key..."
 
         def callback(result):
             if not result:
+                return
+            conflict = keybind_conflicts.findConflict(
+                self._settings, result, exclude_id=f"rf_slot:{id(sk)}")
+            if conflict:
+                # Re-arm immediately so the very next key press is
+                # captured and checked again, instead of dropping out of
+                # capture mode.
+                self._flashCaptureLabel(
+                    self._slotCaptureLabel, conflict,
+                    rearm=lambda: self._startSlotCapture(prompt, callback, reprompt=False))
                 return
             enabled = sk.get("enabled", True)
             sk.clear()
@@ -517,7 +573,7 @@ class RecoilPanel(Panel):
             btn.setText(_slotKeyLabel(sk))
             self._onSettingsChanged(self._settings)
 
-        self._startSlotCapture("Press slot key...", callback)
+        self._startSlotCapture(prompt, callback)
 
     def _deleteSlot(self, sk: dict):
         slot_keys = self._settings.get("rapidfire", {}).get("slot_keys", [])
@@ -532,9 +588,19 @@ class RecoilPanel(Panel):
     def _startAddSlot(self):
         if self._slotCapturing or self._capturing or self._rfTrigCapturing:
             return
+        prompt = "Press weapon slot key..."
 
         def callback(result):
             if not result:
+                return
+            conflict = keybind_conflicts.findConflict(self._settings, result)
+            if conflict:
+                # Re-arm immediately so the very next key press is
+                # captured and checked again, instead of dropping out of
+                # capture mode.
+                self._flashCaptureLabel(
+                    self._slotCaptureLabel, conflict,
+                    rearm=lambda: self._startSlotCapture(prompt, callback, reprompt=False))
                 return
             new_sk = dict(result)
             new_sk["enabled"] = True
@@ -542,18 +608,25 @@ class RecoilPanel(Panel):
             self._refreshSlotRows()
             self._onSettingsChanged(self._settings)
 
-        self._startSlotCapture("Press weapon slot key...", callback)
+        self._startSlotCapture(prompt, callback)
 
     # ------------------------------------------------------------------
     # Slot key capture
     # ------------------------------------------------------------------
 
-    def _startSlotCapture(self, prompt: str, callback):
+    def _startSlotCapture(self, prompt: str, callback, reprompt: bool = True):
         self._slotCapturing       = True
+        self._activeCapturePrompt = prompt
+        self._activeCaptureLabel  = self._slotCaptureLabel
         self._slotCaptureCallback = callback
         self._slotCaptureResult   = None
-        self._slotCaptureLabel.setText(prompt)
-        self._slotCaptureLabel.setVisible(True)
+        if reprompt:
+            # Skipped when re-arming right after a rejection flash — the
+            # flash message is already showing and should stay visible for
+            # its full duration instead of being immediately overwritten.
+            self._slotCaptureLabel.setText(prompt)
+            self._slotCaptureLabel.setStyleSheet(_captureLabelStyleNormal())
+            self._slotCaptureLabel.setVisible(True)
         self._engine.setSuspendHotkeys(True)
         threading.Thread(target=self._slotCaptureThread, daemon=True).start()
 
@@ -609,6 +682,37 @@ class RecoilPanel(Panel):
         self._slotCaptureResult   = None
         if cb:
             cb(result)
+
+    # ------------------------------------------------------------------
+    # Conflict feedback (shared by weapon-slot and RF-slot capture)
+    # ------------------------------------------------------------------
+
+    def _flashCaptureLabel(self, label: QLabel, conflict_with: str, rearm=None):
+        """Show a transient 'already bound' message on a capture-prompt
+        label (self._weaponCaptureLabel / self._slotCaptureLabel), then
+        restore its normal hidden/active style — or, if `rearm` is given,
+        re-arm capture immediately (so the very next key press is captured
+        and checked again) and show the capture prompt again once the
+        flash message's time is up, instead of hiding the label as if
+        capture had silently ended."""
+        label.setText(f"Already bound to {conflict_with}. Try again.")
+        label.setStyleSheet(_captureLabelStyleError())
+        label.setVisible(True)
+        if rearm:
+            rearm()
+        QTimer.singleShot(2200, lambda: self._resetCaptureLabelStyle(label))
+
+    def _resetCaptureLabelStyle(self, label: QLabel):
+        # If a re-armed capture is still running when this timer fires,
+        # keep the prompt visible instead of hiding it — otherwise the
+        # label would disappear while still silently listening for a key.
+        if self._slotCapturing and self._activeCaptureLabel is label:
+            label.setText(self._activeCapturePrompt)
+            label.setStyleSheet(_captureLabelStyleNormal())
+            label.setVisible(True)
+        else:
+            label.setVisible(False)
+            label.setStyleSheet(_captureLabelStyleNormal())
 
     # ------------------------------------------------------------------
     # Reload / engine callbacks
@@ -779,8 +883,11 @@ class RecoilPanel(Panel):
             self._capturing = False
             self._engine.setSuspendHotkeys(False)
 
+        # Note: settings["recoil"]["trigger_keys"] is deliberately NOT
+        # written here — the conflict check in _finishCapture() (main
+        # thread) must run against the *old* value first, and only commit
+        # the new combo if it's actually free to use.
         combo = seen if seen else self._settings["recoil"]["trigger_keys"]
-        self._settings["recoil"]["trigger_keys"] = combo
         self._captureFinished.emit(combo)
 
     @Slot(str)
@@ -789,9 +896,36 @@ class RecoilPanel(Panel):
 
     @Slot(list)
     def _finishCapture(self, combo: list):
+        conflict = keybind_conflicts.findConflict(
+            self._settings, combo, exclude_id="recoil_trigger")
+        if conflict:
+            current = self._settings["recoil"]["trigger_keys"]
+            self._keybindBtn.setText(f"Already used: {conflict}")
+            self._keybindBtn.setStyleSheet("color: #ff6666;")
+            # Re-arm immediately so the next combo the user holds is
+            # captured and checked again, without needing another click.
+            self._capturing = True
+            self._engine.setSuspendHotkeys(True)
+            threading.Thread(target=self._captureThread, daemon=True).start()
+            QTimer.singleShot(1800, lambda: self._revertTriggerBtn(
+                self._keybindBtn, current, lambda: self._capturing))
+            return
+        self._settings["recoil"]["trigger_keys"] = combo
         self._keybindBtn.setText(theme.comboLabel(combo))
         self._keybindBtn.setStyleSheet("")
         self._onSettingsChanged(self._settings)
+
+    def _revertTriggerBtn(self, btn: QPushButton, combo: list, is_capturing_fn):
+        # If a re-armed capture (started right after a conflict) is still
+        # running when this timer fires, keep showing the capture prompt
+        # instead of the old bound combo — otherwise the button would look
+        # "done" while still silently listening for a key.
+        if is_capturing_fn():
+            btn.setText("Hold keys...")
+            btn.setStyleSheet(f"color: {theme.ACTIVE_FG};")
+        else:
+            btn.setText(theme.comboLabel(combo))
+            btn.setStyleSheet("")
 
     # ------------------------------------------------------------------
     # RF trigger capture
@@ -852,8 +986,9 @@ class RecoilPanel(Panel):
             self._rfTrigCapturing = False
             self._engine.setSuspendHotkeys(False)
 
+        # Settings are written in _finishRfTrigCapture() (main thread) only
+        # after the conflict check passes — see _captureThread's comment.
         combo = seen if seen else self._settings.get("rapidfire", {}).get("trigger_keys", ["mouse_left"])
-        self._settings.setdefault("rapidfire", {})["trigger_keys"] = combo
         self._rfTrigCapFinished.emit(combo)
 
     @Slot(str)
@@ -862,6 +997,21 @@ class RecoilPanel(Panel):
 
     @Slot(list)
     def _finishRfTrigCapture(self, combo: list):
+        conflict = keybind_conflicts.findConflict(
+            self._settings, combo, exclude_id="rf_trigger")
+        if conflict:
+            current = self._settings.get("rapidfire", {}).get("trigger_keys", ["mouse_left"])
+            self._rfTrigBtn.setText(f"Already used: {conflict}")
+            self._rfTrigBtn.setStyleSheet("color: #ff6666;")
+            # Re-arm immediately so the next combo the user holds is
+            # captured and checked again, without needing another click.
+            self._rfTrigCapturing = True
+            self._engine.setSuspendHotkeys(True)
+            threading.Thread(target=self._rfTrigCaptureThread, daemon=True).start()
+            QTimer.singleShot(1800, lambda: self._revertTriggerBtn(
+                self._rfTrigBtn, current, lambda: self._rfTrigCapturing))
+            return
+        self._settings.setdefault("rapidfire", {})["trigger_keys"] = combo
         self._rfTrigBtn.setText(theme.comboLabel(combo))
         self._rfTrigBtn.setStyleSheet("")
         self._onSettingsChanged(self._settings)

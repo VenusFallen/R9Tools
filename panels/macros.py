@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 import theme
+import keybind_conflicts
 from panels.base import Panel
 from recoil import MOUSE_BUTTON_FLAGS, scancodeLabel
 from macro_engine import MacroEngine, actionLabel
@@ -23,6 +24,27 @@ _MOUSE_DISPLAY = {
 }
 
 _MODE_OPTIONS = [("once", "ONCE"), ("hold", "HOLD"), ("toggle", "LOOP")]
+
+
+class _ViewStack(QStackedWidget):
+    """QStackedWidget whose sizeHint reflects only the current page.
+
+    Same fix as panel_window._ContentStack, applied one level deeper: this
+    stack toggles between the macro list and the editor. Left as a plain
+    QStackedWidget, its sizeHint()/minimumSizeHint() get pinned to the max
+    ever seen across both pages and never shrink back down (e.g. opening a
+    macro with many actions, then a macro with few, keeps the window stuck
+    at the taller size) — verified live via _reposition()/adjustSize()
+    round-trips. Overriding these two hints to defer to currentWidget()
+    fixes that at the source."""
+
+    def sizeHint(self):
+        w = self.currentWidget()
+        return w.sizeHint() if w is not None else super().sizeHint()
+
+    def minimumSizeHint(self):
+        w = self.currentWidget()
+        return w.minimumSizeHint() if w is not None else super().minimumSizeHint()
 
 
 def _triggerLabel(trig: dict) -> str:
@@ -39,10 +61,20 @@ def _triggerLabel(trig: dict) -> str:
 
 class MacrosPanel(Panel):
 
+    # Caps for the list/editor scroll areas, in px. Raised from the old
+    # 200/160 now that the Macros tab has its own wider/taller default
+    # panel size (see Panel.panel_width above) so meaningfully more rows
+    # are visible at once without inner scrolling.
+    _MACRO_LIST_MAX_H  = 340
+    _ACTION_LIST_MAX_H = 260
+
     _captureDone = Signal()
 
     def __init__(self, parent, settings: dict, macroEngine: MacroEngine, onSettingsChanged):
-        super().__init__(parent)
+        # Wider/landscape default than the other tabs — the action-list and
+        # macro-list scroll areas need more room (tester feedback: "macro
+        # key-list menu is really small"). Still left-anchored like before.
+        super().__init__(parent, panel_width=460)
         self._settings          = settings
         self._macroEngine       = macroEngine
         self._onSettingsChanged = onSettingsChanged
@@ -67,7 +99,7 @@ class MacrosPanel(Panel):
             f" padding: 8px 10px 2px 10px;")
         self._layout.addWidget(title)
 
-        self._viewStack = QStackedWidget()
+        self._viewStack = _ViewStack()
         self._layout.addWidget(self._viewStack)
 
         self._listView   = QWidget()
@@ -93,15 +125,18 @@ class MacrosPanel(Panel):
         self._macroListLayout.setContentsMargins(10, 0, 10, 0)
         self._macroListLayout.setSpacing(2)
 
-        scroll = QScrollArea()
-        scroll.setWidget(self._macroListWidget)
-        scroll.setWidgetResizable(True)
-        scroll.setMinimumHeight(0)
-        scroll.setMaximumHeight(200)
-        scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        vl.addWidget(scroll)
+        self._macroScroll = QScrollArea()
+        self._macroScroll.setWidget(self._macroListWidget)
+        self._macroScroll.setWidgetResizable(True)
+        self._macroScroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        self._macroScroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._macroScroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Height driven by hand in _syncMacroScrollHeight() — see
+        # _syncActionScrollHeight()'s docstring for why setMaximumHeight()
+        # alone (relying on QScrollArea's own sizeHint()) isn't reliable
+        # once macros are added/removed after the first layout pass.
+        self._macroScroll.setFixedHeight(0)
+        vl.addWidget(self._macroScroll)
 
         self._emptyLabel = QLabel("No macros yet.")
         self._emptyLabel.setStyleSheet(
@@ -124,7 +159,7 @@ class MacrosPanel(Panel):
         self._emptyLabel.setVisible(len(macros) == 0)
         for macro in macros:
             self._addMacroRow(macro)
-        QTimer.singleShot(0, lambda: self.window().adjustSize())
+        QTimer.singleShot(0, self._resizeWindowToContent)
 
     def _addMacroRow(self, macro: dict):
         row = QFrame(self._macroListWidget)
@@ -208,7 +243,11 @@ class MacrosPanel(Panel):
         bl = QHBoxLayout(backRow)
         bl.setContentsMargins(10, 4, 10, 4)
         bl.setSpacing(4)
-        backBtn = QPushButton("← Back")
+        # Label makes explicit that this both commits the macro's name (and,
+        # for a brand-new macro, adds it to the list) *and* navigates back —
+        # tester feedback was that a plain "← Back" label made the save
+        # behavior easy to miss/discover only by accident.
+        backBtn = QPushButton("✓ Save && Back")
         backBtn.setCursor(Qt.CursorShape.PointingHandCursor)
         backBtn.clicked.connect(self._saveAndBack)
         bl.addWidget(backBtn)
@@ -299,9 +338,15 @@ class MacrosPanel(Panel):
         self._actionScroll = QScrollArea()
         self._actionScroll.setWidget(self._actionListWidget)
         self._actionScroll.setWidgetResizable(True)
-        self._actionScroll.setMaximumHeight(160)
+        self._actionScroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         self._actionScroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._actionScroll.setFrameShape(QFrame.Shape.NoFrame)
+        # QScrollArea.sizeHint() caches whatever the contained widget's size
+        # was the first time the scroll area was laid out (observed: it
+        # never re-measures itself when rows are added/removed afterward,
+        # even after explicit layout invalidation) — so it's driven by hand
+        # in _syncActionScrollHeight() instead of leaving it to size itself.
+        self._actionScroll.setFixedHeight(0)
         vl.addWidget(self._actionScroll)
 
         # Add Action button
@@ -338,10 +383,80 @@ class MacrosPanel(Panel):
             item = self._actionListLayout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        if self._editingMacro is None:
-            return
-        for action in self._editingMacro.get("actions", []):
-            self._addActionRow(action)
+        if self._editingMacro is not None:
+            for action in self._editingMacro.get("actions", []):
+                self._addActionRow(action)
+        # Mirrors _refreshMacroRows()'s pattern: without this, the window's
+        # height is only ever (re)computed the moment _showEditor() first
+        # runs, so adding/deleting an action mid-session never grows/shrinks
+        # the panel to fit — it just silently scrolls (or wastes space)
+        # inside the capped-height action list instead.
+        QTimer.singleShot(0, self._resizeWindowToContent)
+
+    def _resizeWindowToContent(self):
+        """Re-fit the panel window to whichever view (list or editor) is
+        current. Shared by _refreshMacroRows(), _refreshActionRows() and
+        _showList()/_showEditor() so every content mutation gets the same
+        (verified-correct) resize treatment rather than each call site
+        reinventing it slightly differently."""
+        self._syncMacroScrollHeight()
+        self._syncActionScrollHeight()
+        # Bottom-up invalidate()+activate() of every nested layout between
+        # here and the panel's own top level. invalidate() alone isn't
+        # enough: _viewStack is a QStackedWidget, and an ancestor layout
+        # asking for its contribution to a sizeHint computation bypasses
+        # _ViewStack's Python-level sizeHint() override entirely, instead
+        # reading _viewStack.layout()'s own separately-cached
+        # totalSizeHint() (see PanelWindow._reposition()'s docstring for
+        # the full explanation — this is the same bug one level deeper).
+        # That cache is only refreshed by an explicit activate() call on
+        # that exact layout, bottom-up, before the ancestor layouts (and
+        # eventually PanelWindow._reposition()) query their own sizeHint.
+        self._listView.layout().invalidate()
+        self._editorView.layout().invalidate()
+        self._viewStack.layout().invalidate()
+        self._viewStack.layout().activate()
+        self._layout.invalidate()
+        self._layout.activate()
+        win = self.window()
+        reposition = getattr(win, "_reposition", None)
+        if callable(reposition):
+            # PanelWindow._reposition() resizes via resize(sizeHint()),
+            # which — unlike adjustSize() — reliably shrinks a top-level
+            # window back down, not just grows it (verified live: plain
+            # adjustSize() gets stuck at the largest size ever reached).
+            reposition()
+        else:
+            win.resize(win.sizeHint())
+
+    def _syncActionScrollHeight(self):
+        """Drive the action-list scroll area's height by hand.
+
+        QScrollArea.sizeHint() only reflects the contained widget's size at
+        the moment the scroll area was first laid out — it doesn't
+        re-measure when rows are added/removed later (verified live: rows
+        added after the initial show never grow sizeHint(), even after
+        explicit layout invalidation). Since the outer window's auto-sizing
+        depends on an accurate sizeHint from every widget in the chain,
+        that stale value silently prevented the editor from ever resizing
+        to fit its action list. Setting a fixed height from the content
+        widget's own (reliable) sizeHint sidesteps the bug entirely.
+        """
+        content_h = self._actionListWidget.sizeHint().height()
+        target_h = max(0, min(content_h, self._ACTION_LIST_MAX_H))
+        self._actionScroll.setFixedHeight(target_h)
+
+    def _syncMacroScrollHeight(self):
+        """Drive the macro-list scroll area's height by hand.
+
+        Same fix, same reason, as _syncActionScrollHeight() — this scroll
+        area happened to look correct in earlier ad hoc checks only because
+        those never actually removed a macro after the first layout pass;
+        deleting macros afterward exposed the identical stale-sizeHint bug.
+        """
+        content_h = self._macroListWidget.sizeHint().height()
+        target_h = max(0, min(content_h, self._MACRO_LIST_MAX_H))
+        self._macroScroll.setFixedHeight(target_h)
 
     def _addActionRow(self, action: dict):
         type_str, val_str = actionLabel(action)
@@ -480,10 +595,35 @@ class MacrosPanel(Panel):
         if inp is None or self._editingMacro is None:
             self._trigBtn.setStyleSheet("")
             return
+        exclude_id = f"macro_trigger:{id(self._editingMacro)}"
+        conflict = keybind_conflicts.findConflict(self._settings, inp, exclude_id=exclude_id)
+        if conflict:
+            # Hard-block: discard the capture, explain why via the status
+            # label (the same label used for capture/record prompts), and
+            # immediately re-arm capture — the trigger button stays in
+            # "Press key..." capture mode instead of reverting to the
+            # macro's current trigger, so the user can just press another
+            # key without clicking the button again.
+            self._trigBtn.setText("Press key...")
+            self._trigBtn.setStyleSheet(f"color: {theme.ACTIVE_FG};")
+            self._statusLabel.setText(f"Already bound to {conflict}. Try again.")
+            self._statusLabel.setStyleSheet(
+                f"color: #ff6666; font: italic 9pt 'Segoe UI';"
+                f" padding: 0px 10px 2px 10px;")
+            self._statusLabel.setVisible(True)
+            self._startCapture("", self._onTriggerCaptured, keyboard_only=False)
+            QTimer.singleShot(2200, self._resetStatusLabel)
+            return
         self._editingMacro["trigger"] = inp
         self._trigBtn.setText(_triggerLabel(inp))
         self._trigBtn.setStyleSheet("")
         self._onSettingsChanged(self._settings)
+
+    def _resetStatusLabel(self):
+        self._statusLabel.setVisible(False)
+        self._statusLabel.setStyleSheet(
+            f"color: {theme.ACTIVE_FG}; font: italic 9pt 'Segoe UI';"
+            f" padding: 0px 10px 2px 10px;")
 
     # ------------------------------------------------------------------
     # Generic input capture (interception thread)
@@ -608,18 +748,23 @@ class MacrosPanel(Panel):
             self._recording = False
             self._recordBtn.setText("● Record")
             self._recordBtn.setStyleSheet("")
-        self._refreshMacroRows()
         self._listView.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self._editorView.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self._viewStack.setCurrentIndex(0)
-        QTimer.singleShot(0, lambda: self.window().adjustSize())
+        # _refreshMacroRows() already schedules the resize (via
+        # _resizeWindowToContent) once the rows are rebuilt, so no separate
+        # adjustSize() call is needed here.
+        self._refreshMacroRows()
 
     def _showEditor(self):
         self._listView.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self._editorView.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self._viewStack.setCurrentIndex(1)
+        # _populateEditor() -> _refreshActionRows() already schedules the
+        # resize (via _resizeWindowToContent) once the action rows are
+        # actually populated, so no separate adjustSize() call is needed
+        # here.
         self._populateEditor()
-        QTimer.singleShot(0, lambda: self.window().adjustSize())
 
     def _newMacro(self):
         self._editingMacro = {
@@ -649,6 +794,15 @@ class MacrosPanel(Panel):
                 self._settings.setdefault("macros", []).append(self._editingMacro)
                 self._editingIsNew = False
             self._onSettingsChanged(self._settings)
+            # Brief visual confirmation that this button just saved (in
+            # addition to navigating back) — same green flashBorder()
+            # affordance already used for profile saves elsewhere, chosen
+            # over the in-panel _statusLabel flash used for conflict
+            # rejection since that label lives on the editor view and would
+            # disappear the instant _showList() below switches views.
+            flashBorder = getattr(self.window(), "flashBorder", None)
+            if callable(flashBorder):
+                flashBorder(theme.FLASH_SAVE)
         self._editingMacro = None
         self._showList()
 

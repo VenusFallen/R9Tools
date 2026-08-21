@@ -110,6 +110,35 @@ class SettingsPanel(Panel):
         tl.addStretch()
         themeCard.layout().addWidget(themeRow)
 
+        # ---- Running Indicator ----
+        # Simple "R9Tools is loaded" badge toggle — intentionally separate
+        # from the module indicator (R / RF) settings on the Overlay tab.
+        self._layout.addWidget(_sep())
+        riLbl = QLabel("Running Indicator")
+        riLbl.setStyleSheet(
+            f"color: {theme.DIM}; font: bold 8pt 'Segoe UI'; padding: 2px 12px;")
+        self._layout.addWidget(riLbl)
+        riDescLbl = QLabel(
+            "Shows a small \"R9\" badge in the top-right corner to confirm "
+            "R9Tools is loaded.")
+        riDescLbl.setStyleSheet(f"color: {theme.LABEL_FG}; padding: 0px 12px 4px 12px;")
+        riDescLbl.setWordWrap(True)
+        self._layout.addWidget(riDescLbl)
+
+        ri = self._settings.setdefault("running_indicator", {"enabled": True})
+        riRow = QFrame()
+        rl = QHBoxLayout(riRow)
+        rl.setContentsMargins(10, 3, 10, 3)
+        rl.setSpacing(4)
+        riEnLbl = QLabel("Enabled", riRow)
+        riEnLbl.setFixedWidth(120)
+        rl.addWidget(riEnLbl)
+        self._riEnabledSwitch = theme.ToggleSwitch(
+            riRow, value=ri.get("enabled", True), command=self._onRiToggle)
+        rl.addWidget(self._riEnabledSwitch)
+        rl.addStretch()
+        self._layout.addWidget(riRow)
+
         # ---- Hotkeys header ----
         self._layout.addWidget(_sep())
         hkTitle = QLabel("Hotkeys")
@@ -130,14 +159,16 @@ class SettingsPanel(Panel):
             self, "Menu Toggle:",
             binding=hk["overlay_toggle"],
             onChange=self._onOverlayToggleChange,
-            onCapture=self._onCapture)
+            onCapture=self._onCapture,
+            settings=self._settings, exclude_id="hotkey:overlay_toggle")
         self._layout.addWidget(self._overlayBtn)
 
         self._quitBtn = theme.KeybindButton(
             self, "Quit:",
             binding=hk["quit"],
             onChange=self._onQuitChange,
-            onCapture=self._onCapture)
+            onCapture=self._onCapture,
+            settings=self._settings, exclude_id="hotkey:quit")
         self._layout.addWidget(self._quitBtn)
 
         # ---- Recoil hotkeys ----
@@ -151,21 +182,24 @@ class SettingsPanel(Panel):
             self, "Recoil Toggle:",
             binding=hk["recoil_toggle"],
             onChange=self._onRecoilToggleChange,
-            onCapture=self._onCapture)
+            onCapture=self._onCapture,
+            settings=self._settings, exclude_id="hotkey:recoil_toggle")
         self._layout.addWidget(self._recoilBtn)
 
         self._strengthUpBtn = theme.KeybindButton(
             self, "Strength +:",
             binding=hk["recoil_strength_up"],
             onChange=self._onStrengthUpChange,
-            onCapture=self._onCapture)
+            onCapture=self._onCapture,
+            settings=self._settings, exclude_id="hotkey:recoil_strength_up")
         self._layout.addWidget(self._strengthUpBtn)
 
         self._strengthDownBtn = theme.KeybindButton(
             self, "Strength -:",
             binding=hk["recoil_strength_down"],
             onChange=self._onStrengthDownChange,
-            onCapture=self._onCapture)
+            onCapture=self._onCapture,
+            settings=self._settings, exclude_id="hotkey:recoil_strength_down")
         self._layout.addWidget(self._strengthDownBtn)
 
         # ---- Updates ----
@@ -276,6 +310,12 @@ class SettingsPanel(Panel):
         for n, btn in self._themeBtns.items():
             self._applyThemeButtonStyle(btn, n == new_theme)
 
+        # Running indicator — NOT forced off on profile switch (unlike the
+        # other overlay toggles); just mirror whatever the profile has saved.
+        ri = settings.setdefault("running_indicator", {"enabled": True})
+        self._settings["running_indicator"] = ri
+        self._riEnabledSwitch.set(ri.get("enabled", True))
+
         # Hotkeys
         hk = settings.get("hotkeys", {})
         self._settings["hotkeys"].update(hk)
@@ -311,6 +351,11 @@ class SettingsPanel(Panel):
 
     def _onWindowChange(self, value: str):
         self._settings["window_filter"] = value
+        self._onSettingsChanged(self._settings)
+
+    def _onRiToggle(self):
+        self._settings.setdefault("running_indicator", {})["enabled"] = \
+            self._riEnabledSwitch.get()
         self._onSettingsChanged(self._settings)
 
     def _onOverlayToggleChange(self, binding: dict):

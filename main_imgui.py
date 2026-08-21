@@ -9,6 +9,8 @@ that is eligible for hardware Multi-Plane Overlay (MPO), eliminating the
 import subprocess
 import sys
 
+from crash_logging import setup_logging
+
 _INTERCEPTION_SERVICES = ["keyboard_filter", "mouse_filter"]
 
 
@@ -27,6 +29,7 @@ from updater import apply_pending_lhm
 
 
 def main():
+    setup_logging()
     apply_pending_lhm()          # move any staged LHM DLLs before engine loads them
     _interception_driver(start=True)
 

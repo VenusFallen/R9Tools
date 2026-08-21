@@ -37,3 +37,6 @@ assets/
 # LHM DLLs and runtime files (downloaded via auto-updater or manually)
 lib/*.dll
 lib/lhm_version.txt
+
+# R9Tools runtime logs (only created here if the LOCALAPPDATA fallback triggers)
+logs/
