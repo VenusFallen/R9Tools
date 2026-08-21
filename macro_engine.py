@@ -8,7 +8,7 @@ import random
 
 import interception
 
-from recoil import MOUSE_BUTTON_FLAGS, scancodeLabel
+from recoil import MOUSE_BUTTON_FLAGS, scancodeLabel, windowMatchesFilter
 
 _MOUSE_DISPLAY = {
     "mouse_left":   "LMB",
@@ -89,9 +89,16 @@ class MacroEngine:
             self._recordStroke(stroke, is_keyboard, is_e0)
             return False
 
-        # Trigger detection
+        # Trigger detection — respects settings["window_filter"] like recoil/remapper
         with self._lock:
             macros = list(self._fullSettings.get("macros", []))
+            window_filter = self._fullSettings.get("window_filter", "")
+
+        if not macros:
+            return False
+
+        if not windowMatchesFilter(window_filter):
+            return False
 
         for macro in macros:
             if not macro.get("enabled", True):
@@ -106,7 +113,8 @@ class MacroEngine:
                     continue
                 if trig.get("e0", False) != is_e0:
                     continue
-                self._handleKeyTrigger(stroke, macro)
+                is_up = bool(stroke.flags & interception.KeyFlag.KEY_UP)
+                self._handleTrigger(is_up, macro)
                 break
 
             elif not is_keyboard and isinstance(stroke, interception.MouseStroke):
@@ -119,41 +127,13 @@ class MacroEngine:
                 is_up   = bool(stroke.button_flags & pair[1])
                 if not is_down and not is_up:
                     continue
-                self._handleMouseTrigger(is_up, macro)
+                self._handleTrigger(is_up, macro)
                 break
 
         return False
 
-    def _handleKeyTrigger(self, stroke, macro: dict):
-        is_up = bool(stroke.flags & interception.KeyFlag.KEY_UP)
-        mode  = macro.get("mode", "once")
-        if mode == "hold":
-            if not is_up:
-                with self._lock:
-                    self._triggerHeld = True
-                self._queueMacro(macro)
-            else:
-                with self._lock:
-                    self._triggerHeld = False
-                self._cancelEvent.set()
-        elif mode == "toggle":
-            if not is_up:
-                return
-            with self._lock:
-                running = self._toggleRunning
-            if running:
-                self._cancelEvent.set()
-                with self._lock:
-                    self._toggleRunning = False
-            else:
-                with self._lock:
-                    self._toggleRunning = True
-                self._queueMacro(macro)
-        else:  # once — fire on key-up
-            if is_up:
-                self._queueMacro(macro)
-
-    def _handleMouseTrigger(self, is_up: bool, macro: dict):
+    def _handleTrigger(self, is_up: bool, macro: dict):
+        """Shared hold/toggle/once state machine for both key and mouse triggers."""
         mode = macro.get("mode", "once")
         if mode == "hold":
             if not is_up:
@@ -177,7 +157,7 @@ class MacroEngine:
                 with self._lock:
                     self._toggleRunning = True
                 self._queueMacro(macro)
-        else:  # once — fire on button-up
+        else:  # once — fire on key-up / button-up
             if is_up:
                 self._queueMacro(macro)
 

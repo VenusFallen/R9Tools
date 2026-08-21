@@ -23,13 +23,12 @@ def _interception_driver(start: bool) -> None:
         )
 
 import profiles as prof
-from recoil         import RecoilEngine
-from macro_engine   import MacroEngine
-from bridge         import UIBridge
-from overlay_window import OverlayWindow
-from stats_poller   import StatsPoller
-from stats_overlay  import StatsOverlayWindow
-from panel_window   import PanelWindow
+from recoil       import RecoilEngine
+from macro_engine import MacroEngine
+from bridge       import UIBridge
+from dx11_overlay import DX11Overlay
+from stats_poller import StatsPoller
+from panel_window import PanelWindow
 
 
 def _qt_message_filter(msg_type, _context, msg):
@@ -59,17 +58,14 @@ def main():
     macro_engine = MacroEngine(cfg)
     engine.setMacroEngine(macro_engine)
 
-    # Overlays need cfg before onSettingsChanged is defined
-    overlay_win   = OverlayWindow(cfg, engine)
-    stats_overlay = StatsOverlayWindow(cfg)
-    stats_poller  = StatsPoller(cfg)
+    dx_overlay  = DX11Overlay(cfg, engine)
+    stats_poller = StatsPoller(cfg)
 
     def onSettingsChanged(updated: dict):
         engine.updateSettings(updated)
         macro_engine.updateSettings(updated)
         stats_poller.updateSettings(updated)
-        overlay_win.refresh()
-        stats_overlay.applySettings()
+        dx_overlay.refresh()
 
     # Signal bridge — lives on the main thread; engine stores .emit references.
     # Cross-thread emissions are automatically delivered via QueuedConnection.
@@ -80,10 +76,14 @@ def main():
     # Bridge → UI
     bridge.overlayToggled.connect(panel_win.toggleOverlay)
     bridge.recoilToggled.connect(panel_win.onRecoilToggled)
-    bridge.recoilToggled.connect(lambda _: overlay_win.refresh())
+    bridge.recoilToggled.connect(lambda _: dx_overlay.refresh())
     bridge.strengthChanged.connect(panel_win.onStrengthChanged)
-    bridge.strengthChanged.connect(overlay_win.showStrengthIndicator)
-    bridge.statsUpdated.connect(stats_overlay.updateStats)
+    # dx_overlay methods are thread-safe (internal lock); DirectConnection is fine
+    # because statsUpdated/strengthChanged are delivered on the Qt main thread
+    # (StatsPoller → bridge uses QueuedConnection, engine callbacks → bridge are
+    # emitted from the interception thread and Qt auto-queues them).
+    bridge.strengthChanged.connect(dx_overlay.show_strength_indicator)
+    bridge.statsUpdated.connect(dx_overlay.update_stats)
     bridge.quitRequested.connect(app.quit)
 
     # Engine → bridge (interception thread calls these directly)
@@ -96,16 +96,16 @@ def main():
     stats_poller.setCallback(bridge.statsUpdated.emit)
 
     engine.start()
+    dx_overlay.start()
     stats_poller.start()
 
-    # overlay_win and stats_overlay start hidden; shown on demand
     # panel_win starts hidden; overlay hotkey shows/hides it
-
     app.exec()
 
     engine.stop()
     macro_engine.stop()
     stats_poller.stop()
+    dx_overlay.stop()
     _interception_driver(start=False)
 
 

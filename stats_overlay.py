@@ -1,17 +1,33 @@
 """
 StatsOverlayWindow — small always-on-top click-through corner overlay for hardware stats.
-Uses WA_TranslucentBackground + WS_EX_TRANSPARENT for a composited rounded overlay.
+
+Transparency approach:
+  WS_EX_LAYERED with LWA_COLORKEY is used for transparency, matching the crosshair
+  overlay.  paintEvent fills the entire window with magenta first; DWM punches through
+  any pixel that exactly matches the key color.  The rounded-rect background and text
+  overwrite the magenta with opaque content.  No setMask / QRegion needed.
+
+bg_alpha (0–100) controls background shade: 0 = subtle gray, 100 = solid black.
+Text remains fully opaque regardless of bg_alpha.
 """
 import ctypes
 
-from PySide6.QtCore    import Qt, QRectF, Slot
+from PySide6.QtCore    import Qt, QRectF, QTimer, Slot
 from PySide6.QtGui     import QColor, QFont, QPainter, QPainterPath
 from PySide6.QtWidgets import QApplication, QWidget
 
 from theme import TOPBAR_H, TOPBAR_MARGIN_TOP, TOPBAR_MARGIN_BOTTOM
 
 _GWL_EXSTYLE       = -20
+_WS_EX_LAYERED     = 0x00080000
 _WS_EX_TRANSPARENT = 0x00000020
+_WS_EX_NOACTIVATE  = 0x08000000
+_LWA_COLORKEY      = 0x00000001
+
+# Magenta as Win32 COLORREF (R=0xFF, G=0x00, B=0xFF → 0x00FF00FF)
+# and as a QColor for paintEvent's background fill.
+_COLORKEY     = 0x00FF00FF
+_QCOLOR_KEY   = QColor(255, 0, 255)
 
 _MARGIN       = 12    # px gap from screen edge
 _PAD_X        = 8     # horizontal text padding inside the window
@@ -27,15 +43,17 @@ class StatsOverlayWindow(QWidget):
 
     def __init__(self, settings: dict):
         super().__init__()
-        self._settings  = settings
-        self._data: dict = {}
-        self._content_h: int = 0
+        self._settings        = settings
+        self._data: dict      = {}
+        self._content_h: int  = 0
+        self._prev_render_key = None
 
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
 
     def showEvent(self, event):
@@ -43,7 +61,12 @@ class StatsOverlayWindow(QWidget):
         hwnd  = int(self.winId())
         style = ctypes.windll.user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
         ctypes.windll.user32.SetWindowLongW(
-            hwnd, _GWL_EXSTYLE, style | _WS_EX_TRANSPARENT)
+            hwnd, _GWL_EXSTYLE,
+            style | _WS_EX_LAYERED | _WS_EX_TRANSPARENT | _WS_EX_NOACTIVATE
+        )
+        ctypes.windll.user32.SetLayeredWindowAttributes(
+            hwnd, _COLORKEY, 0, _LWA_COLORKEY
+        )
 
     # ------------------------------------------------------------------
     # Public interface
@@ -106,7 +129,7 @@ class StatsOverlayWindow(QWidget):
         return out
 
     # ------------------------------------------------------------------
-    # Visibility / resize
+    # Visibility / resize / position
     # ------------------------------------------------------------------
 
     def _refresh(self):
@@ -120,12 +143,21 @@ class StatsOverlayWindow(QWidget):
             return
 
         h = _PAD_Y * 2 + len(lines) * _LINE_H
-        self._content_h = h
-        self.setFixedSize(_WIN_W + _SHADOW_SIZE, h + _SHADOW_SIZE)
+        if h != self._content_h:
+            self._content_h = h
+            self.setFixedSize(_WIN_W + _SHADOW_SIZE, h + _SHADOW_SIZE)
+
         self._reposition()
+
+        st         = self._settings.get("stats", {})
+        render_key = (lines, st.get("bg_alpha", 70), st.get("text_color", "#ffffff"))
+
         if not self.isVisible():
             self.show()
-        self.update()
+        elif render_key != self._prev_render_key:
+            self.update()
+
+        self._prev_render_key = render_key
 
     def _reposition(self):
         screen = QApplication.primaryScreen().geometry()
@@ -139,7 +171,7 @@ class StatsOverlayWindow(QWidget):
             y = screen.y() + _TOPBAR_TOTAL + _MARGIN
         elif "bottom" in corner:
             y = screen.y() + screen.height() - h - _MARGIN
-        else:  # middle_left / middle_right
+        else:
             y = screen.y() + (screen.height() - h) // 2
 
         self.move(x, y)
@@ -154,31 +186,39 @@ class StatsOverlayWindow(QWidget):
             return
 
         st       = self._settings.get("stats", {})
-        bg_alpha = int(st.get("bg_alpha", 70) * 2.55)
+        bg_alpha = st.get("bg_alpha", 70)
         fg_color = QColor(st.get("text_color", "#ffffff"))
         h        = _PAD_Y * 2 + len(lines) * _LINE_H
 
+        shade        = int(136 * (1.0 - bg_alpha / 100.0))
+        shadow_shade = max(0, shade - 24)
+        bg_color     = QColor(shade, shade, shade)
+        shadow_color = QColor(shadow_shade, shadow_shade, shadow_shade)
+
+        dim_val = int(221 - 85 * (bg_alpha / 100.0))
+        dim     = QColor(dim_val, dim_val, dim_val)
+
         painter = QPainter(self)
+
+        # Fill entire window with the transparent color key.
+        # All pixels not overwritten below will be punched through by DWM.
+        painter.fillRect(self.rect(), _QCOLOR_KEY)
+
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        # Drop shadow (offset by _SHADOW_SIZE, same radius, alpha scaled with bg)
-        shadow_alpha = min(200, int(bg_alpha * 0.75))
-        shadow_path  = QPainterPath()
-        shadow_path.addRoundedRect(
-            QRectF(_SHADOW_SIZE, _SHADOW_SIZE, _WIN_W, h), _RADIUS, _RADIUS)
-        painter.fillPath(shadow_path, QColor(0, 0, 0, shadow_alpha))
+        # Drop shadow
+        painter.fillRect(_SHADOW_SIZE, _SHADOW_SIZE, _WIN_W, h, shadow_color)
 
-        # Background rounded rect
+        # Rounded rect background
         bg_path = QPainterPath()
         bg_path.addRoundedRect(QRectF(0, 0, _WIN_W, h), _RADIUS, _RADIUS)
-        painter.fillPath(bg_path, QColor(0, 0, 0, bg_alpha))
+        painter.fillPath(bg_path, bg_color)
 
-        # Text (clipped to content area)
+        # Text
         painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
-        fm  = painter.fontMetrics()
-        y   = _PAD_Y + fm.ascent()
-        dim = QColor("#888888")
+        fm = painter.fontMetrics()
+        y  = _PAD_Y + fm.ascent()
 
         painter.setClipRect(0, 0, _WIN_W, h)
 

@@ -98,6 +98,24 @@ def scancodeLabel(code: int, e0: bool = False) -> str:
     return SCANCODE_NAMES.get(code, f"SC{code}")
 
 
+def windowMatchesFilter(filter_name: str) -> bool:
+    """Module-level so non-RecoilEngine consumers (e.g. MacroEngine) can respect
+    settings["window_filter"] without needing a RecoilEngine reference."""
+    if not filter_name:
+        return True
+    if not _WIN32_AVAILABLE:
+        return True   # can't check, allow through
+    try:
+        hwnd = win32gui.GetForegroundWindow()
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        name = psutil.Process(pid).name().lower()
+        return name == filter_name.lower()
+    except psutil.NoSuchProcess:
+        return False  # process died — don't activate
+    except Exception:
+        return True   # transient OS error — allow through
+
+
 class RecoilEngine:
     def __init__(self, settings: dict):
         self._fullSettings = settings
@@ -193,6 +211,11 @@ class RecoilEngine:
     @property
     def rfArmed(self) -> bool:
         with self._lock:
+            if not self._fullSettings.get("rapidfire", {}).get("slot_keys"):
+                # No weapon slots configured — RF has nothing to arm against,
+                # so it's implicitly armed whenever it's enabled (see
+                # _rfShouldActivate_locked for the matching activation rule).
+                return True
             return self._rfArmed
 
     @property
@@ -203,7 +226,14 @@ class RecoilEngine:
     def _rfShouldActivate_locked(self) -> bool:
         """Check RF conditions. Must be called with self._lock held."""
         rf = self._fullSettings.get("rapidfire", {})
-        return rf.get("enabled", False) and self._rfArmed
+        if not rf.get("enabled", False):
+            return False
+        if not rf.get("slot_keys"):
+            # No weapon slots configured — don't gate on the arm state, since
+            # nothing can ever set self._rfArmed True in that case and RF
+            # would otherwise be permanently inert despite being "enabled".
+            return True
+        return self._rfArmed
 
     def _activeWeapon(self) -> dict:
         """Return active weapon dict. Must be called with self._lock held."""
@@ -364,10 +394,15 @@ class RecoilEngine:
                         self._rfFireHeld = False
                         suppress_rf      = self._rfSuppressing
                         self._rfSuppressing = False
-                    # Mouse slot keys: set RF armed state
+                    # Mouse slot keys: toggle RF armed state on release.
+                    # A disabled slot-key binding doesn't participate at all.
+                    # If multiple slot_keys are configured, each independently
+                    # toggles the single shared _rfArmed flag (simplest/most
+                    # predictable interpretation — no per-key arm state).
                     for sk in slot_keys:
                         if sk.get("type") == "mouse" and sk.get("button") == key:
-                            self._rfArmed = sk.get("enabled", True)
+                            if sk.get("enabled", True):
+                                self._rfArmed = not self._rfArmed
                             break
                     # Mouse weapon slots: select active weapon
                     for i, w in enumerate(weaponSlots):
@@ -388,10 +423,12 @@ class RecoilEngine:
                 rf          = self._fullSettings.get("rapidfire", {})
                 slot_keys   = list(rf.get("slot_keys", []))
                 weaponSlots = list(self._settings.get("weapons", []))
-                # Scroll slot keys: set RF armed state
+                # Scroll slot keys: toggle RF armed state (see mouse slot-key
+                # handler above for the toggle-vs-force rationale).
                 for sk in slot_keys:
                     if sk.get("type") == "scroll" and sk.get("direction") == direction:
-                        self._rfArmed = sk.get("enabled", True)
+                        if sk.get("enabled", True):
+                            self._rfArmed = not self._rfArmed
                         break
                 # Scroll weapon slots: select active weapon
                 for i, w in enumerate(weaponSlots):
@@ -475,12 +512,15 @@ class RecoilEngine:
                 self._quitCallback()
             return False
 
-        # Keyboard slot keys: set armed state based on slot's enabled flag (pass through)
+        # Keyboard slot keys: toggle RF armed state on release, gated by the
+        # slot's enabled flag (pass through). See mouse slot-key handler
+        # above for the toggle-vs-force rationale.
         for sk in rfSlotKeys:
             if sk.get("type") not in ("mouse", "scroll"):
                 if sk.get("code") == stroke.code and sk.get("e0", False) == isE0:
-                    with self._lock:
-                        self._rfArmed = sk.get("enabled", True)
+                    if sk.get("enabled", True):
+                        with self._lock:
+                            self._rfArmed = not self._rfArmed
                     return False
 
         # Recoil weapon slot keys: select active weapon (pass through)
@@ -557,19 +597,7 @@ class RecoilEngine:
         return False
 
     def windowMatchesFilter(self, filter_name: str) -> bool:
-        if not filter_name:
-            return True
-        if not _WIN32_AVAILABLE:
-            return True   # can't check, allow through
-        try:
-            hwnd = win32gui.GetForegroundWindow()
-            _, pid = win32process.GetWindowThreadProcessId(hwnd)
-            name = psutil.Process(pid).name().lower()
-            return name == filter_name.lower()
-        except psutil.NoSuchProcess:
-            return False  # process died — don't activate
-        except Exception:
-            return True   # transient OS error — allow through
+        return windowMatchesFilter(filter_name)
 
     def _sendSynthesized(self, to: dict, is_up: bool, inter=None):
         t = to.get("type")

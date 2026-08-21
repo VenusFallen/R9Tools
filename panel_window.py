@@ -5,7 +5,7 @@ Implemented as two coordinated windows:
   PanelWindow    — PANEL_W-wide content area, hides when collapsed
 """
 from PySide6.QtCore import Qt, QTimer, Slot
-from PySide6.QtGui import QPainterPath, QRegion
+from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QPushButton,
     QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
@@ -49,12 +49,13 @@ class _TopBarWindow(QWidget):
 
     def __init__(self, panelWin: "PanelWindow"):
         super().__init__()
-        self._panelWin  = panelWin
-        self._activeTab = _TAB_RECOIL
+        self._panelWin   = panelWin
+        self._activeTab  = _TAB_RECOIL
+        self._flashColor = ""   # non-empty while border flash is active
 
-        # No WA_TranslucentBackground — setMask() clips to the bar shape instead,
-        # eliminating WS_EX_LAYERED and its DWM HDR compositing cost.
         self.setWindowFlags(_WIN_FLAGS)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
         screenW = QApplication.primaryScreen().geometry().width()
         totalH  = TOPBAR_MARGIN_TOP + TOPBAR_H + TOPBAR_MARGIN_BOTTOM
@@ -78,7 +79,6 @@ class _TopBarWindow(QWidget):
         self._tabButtons: dict[int, QPushButton] = {}
         self._build()
         self._applyBarStyle()
-        self._applyMask()
 
     def _build(self):
         for label, index in [("WEAPON",    _TAB_RECOIL),
@@ -108,15 +108,26 @@ class _TopBarWindow(QWidget):
         self._tabButtons[index] = btn
         return btn
 
-    def _applyMask(self):
-        """Clip window to the rounded bar frame, replacing WA_TranslucentBackground."""
+    def paintEvent(self, event):
+        """Draw the rounded bar background; WA_TranslucentBackground makes the rest invisible."""
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
         path = QPainterPath()
         path.addRoundedRect(
             TOPBAR_MARGIN_SIDE, TOPBAR_MARGIN_TOP,
             self.width() - 2 * TOPBAR_MARGIN_SIDE, TOPBAR_H,
             TOPBAR_RADIUS, TOPBAR_RADIUS,
         )
-        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(theme.BAR_BG))
+        p.drawPath(path)
+        if self._flashColor:
+            from PySide6.QtGui import QPen
+            pen = QPen(QColor(self._flashColor), 1.5)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(path)
+        p.end()
 
     # ------------------------------------------------------------------
     # Public interface used by PanelWindow
@@ -128,13 +139,13 @@ class _TopBarWindow(QWidget):
             self._styleTabButton(btn, i == index)
 
     def flashBorder(self, color: str):
-        self._barFrame.setStyleSheet(
-            f"QFrame#topBar {{ background-color: {theme.BAR_BG};"
-            f" border-radius: {TOPBAR_RADIUS}px; border: 1.5px solid {color}; }}"
-            f"QFrame#topBar * {{ background-color: transparent; }}")
-        QTimer.singleShot(
-            theme.FLASH_MS,
-            lambda: self._applyBarStyle())
+        self._flashColor = color
+        self.update()
+        QTimer.singleShot(theme.FLASH_MS, self._clearFlash)
+
+    def _clearFlash(self):
+        self._flashColor = ""
+        self.update()
 
     def applyTheme(self):
         self._applyBarStyle()
@@ -143,9 +154,9 @@ class _TopBarWindow(QWidget):
             self._styleTabButton(btn, i == self._activeTab)
 
     def _applyBarStyle(self):
+        # Background is painted directly in paintEvent; frame itself is transparent.
         self._barFrame.setStyleSheet(
-            f"QFrame#topBar {{ background-color: {theme.BAR_BG};"
-            f" border-radius: {TOPBAR_RADIUS}px; }}"
+            f"QFrame#topBar {{ background-color: transparent; }}"
             f"QFrame#topBar * {{ background-color: transparent; }}")
 
     # ------------------------------------------------------------------
@@ -182,16 +193,9 @@ class _TopBarWindow(QWidget):
 # ---------------------------------------------------------------------------
 
 class _RoundedFrame(QFrame):
-    """QFrame that re-clips itself to a rounded rect on every resize.
-    This handles both normal layout changes and DPI-scaling geometry overrides."""
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        w, h = self.width(), self.height()
-        if w > 0 and h > 0:
-            path = QPainterPath()
-            path.addRoundedRect(0, 0, w, h, TOPBAR_RADIUS, TOPBAR_RADIUS)
-            self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+    """QFrame with rounded corners via QSS border-radius (no mask needed with
+    WA_TranslucentBackground on the parent window)."""
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -207,11 +211,15 @@ class PanelWindow(QWidget):
         self._engine           = engine
         self._macroEngine      = macroEngine
         self._settingsCallback = onSettingsChanged
-        self._activeTab        = profileData.get("last_tab", _TAB_RECOIL)
+        _valid_tabs = {_TAB_RECOIL, _TAB_CROSSHAIR, _TAB_REMAPPER,
+                       _TAB_MACROS, _TAB_STATS, _TAB_PROFILES, _TAB_SETTINGS}
+        _saved_tab             = profileData.get("last_tab", _TAB_RECOIL)
+        self._activeTab        = _saved_tab if _saved_tab in _valid_tabs else _TAB_RECOIL
         self._panelCollapsed   = False
 
-        # No WA_TranslucentBackground — resizeEvent applies setMask() instead.
         self.setWindowFlags(_WIN_FLAGS)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
         # Topbar lives in its own full-width window
         self._topBarWin = _TopBarWindow(self)
@@ -225,14 +233,10 @@ class PanelWindow(QWidget):
     # Layout / mask
     # ------------------------------------------------------------------
 
-    def resizeEvent(self, event):
-        """Keep the window mask matched to the rounded content frame."""
-        super().resizeEvent(event)
-        w, h = self.width(), self.height()
-        if w > 0 and h > 0:
-            path = QPainterPath()
-            path.addRoundedRect(0, 0, w, h, TOPBAR_RADIUS, TOPBAR_RADIUS)
-            self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+    def paintEvent(self, event):
+        """WA_TranslucentBackground makes untouched pixels invisible; draw nothing here —
+        the content frame QSS provides the panel background."""
+        pass
 
     def _buildLayout(self):
         root = QVBoxLayout(self)
@@ -357,7 +361,7 @@ class PanelWindow(QWidget):
     def _applyThemeQSS(self):
         self.setStyleSheet(
             theme.makeQSS()
-            + f"PanelWindow {{ background-color: {theme.PANEL_BG}; }}"
+            + "PanelWindow { background-color: transparent; }"
             + f"QFrame#panelContent {{ background-color: {theme.PANEL_BG};"
             f" border-radius: {TOPBAR_RADIUS}px;"
             f" border: 1px solid {theme.PANEL_BORDER}; }}")
