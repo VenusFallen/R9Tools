@@ -193,11 +193,11 @@ To enable the Stats Overlay, open the **Settings** tab and click **Check for Upd
 2. Clone or download the repository
 3. Install Python dependencies:
 
-```bash
+```bashab
 pip install PySide6 interception-python psutil pywin32 pythonnet
 ```
 
-4. Download `LibreHardwareMonitorLib.dll` from the [LibreHardwareMonitor releases](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases) page and place it in a `lib/` folder next to `main.py` (required for the Stats Overlay)
+4. Download the LHM zip (not the `.NET 10` build) from the [LibreHardwareMonitor releases](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases) page and extract **every** `.dll` from it into a `lib/` folder next to `main.py` — `LibreHardwareMonitorLib.dll` is the main assembly, but its dependency DLLs are required too (required for the Stats Overlay; see `lib/PLACE_DLL_HERE.txt`)
 
 5. Run as **administrator**:
 

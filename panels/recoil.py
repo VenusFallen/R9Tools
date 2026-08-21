@@ -104,11 +104,19 @@ class RecoilPanel(Panel):
     def _buildRecoilSection(self):
         s = self._settings["recoil"]
 
-        title = QLabel("Recoil Compensation")
-        title.setStyleSheet(
-            f"color: {theme.ACCENT}; font: bold 10pt 'Segoe UI';"
-            f" padding: 8px 10px 2px 10px;")
-        self._layout.addWidget(title)
+        # Title row with enabled toggle (mirrors _buildRfSection's title row)
+        titleRow = QFrame()
+        tl = QHBoxLayout(titleRow)
+        tl.setContentsMargins(10, 6, 10, 2)
+        tl.setSpacing(6)
+        title = QLabel("Recoil Compensation", titleRow)
+        title.setStyleSheet(f"color: {theme.ACCENT}; font: bold 10pt 'Segoe UI';")
+        tl.addWidget(title)
+        tl.addStretch()
+        self._recoilEnabledSwitch = theme.ToggleSwitch(
+            titleRow, value=s.get("enabled", False), command=self._onRecoilEnabledChange)
+        tl.addWidget(self._recoilEnabledSwitch)
+        self._layout.addWidget(titleRow)
 
         statusRow = QFrame()
         sl = QHBoxLayout(statusRow)
@@ -611,6 +619,8 @@ class RecoilPanel(Panel):
         s = settings["recoil"]
         self._settings["recoil"].update(s)
         self._keybindBtn.setText(theme.comboLabel(s["trigger_keys"]))
+        self._recoilEnabledSwitch.set(False)
+        self._settings["recoil"]["enabled"] = False
         self._humanizeSwitch.set(s.get("humanize", False))
         self._refreshWeaponRows()
 
@@ -632,6 +642,10 @@ class RecoilPanel(Panel):
     # ------------------------------------------------------------------
     # Event handlers — Recoil
     # ------------------------------------------------------------------
+
+    def _onRecoilEnabledChange(self):
+        self._settings["recoil"]["enabled"] = self._recoilEnabledSwitch.get()
+        self._onSettingsChanged(self._settings)
 
     def _onHumanizeChange(self):
         self._settings["recoil"]["humanize"] = self._humanizeSwitch.get()
@@ -658,6 +672,14 @@ class RecoilPanel(Panel):
     # ------------------------------------------------------------------
 
     def _pollStatus(self):
+        # Keep the enable switch in sync with the underlying state — the
+        # engine's hotkey toggle (recoil_toggle) mutates settings["recoil"]
+        # ["enabled"] directly on the shared settings dict, bypassing this
+        # panel entirely. ToggleSwitch.set() only updates the visual and
+        # never re-fires the command callback, so this can't loop back into
+        # _onRecoilEnabledChange / _onSettingsChanged.
+        self._recoilEnabledSwitch.set(self._settings["recoil"]["enabled"])
+
         # Recoil status
         if self._settings["recoil"]["enabled"] and self._engine.isActive:
             color, text, glow = "#22c55e", "ACTIVE", True

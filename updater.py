@@ -147,23 +147,26 @@ def apply_pending_lhm() -> bool:
     lib.mkdir(exist_ok=True)
     applied = False
     for src in pending.iterdir():
-        dest = lib / src.name
+        dest   = lib / src.name
+        copied = False
         # Retry a few times — dest may still be locked if the previous process
         # is still shutting down (.NET releases DLL handles only after full exit).
         for attempt in range(6):
             try:
                 shutil.copy2(str(src), str(dest))
-                try:
-                    src.unlink()
-                except Exception:
-                    pass
-                applied = True
+                copied = True
                 break
             except PermissionError:
                 if attempt < 5:
                     time.sleep(0.5)
             except Exception:
                 break
+        if copied:
+            applied = True
+            try:
+                src.unlink()
+            except Exception:
+                pass
     try:
         pending.rmdir()   # only removes if now empty
     except Exception:
