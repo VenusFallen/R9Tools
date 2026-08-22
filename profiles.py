@@ -1,9 +1,73 @@
 import json
 import os
 import copy
+import shutil
 
-PROFILES_FILE = os.path.join(os.path.dirname(__file__), "profiles.json")
+# ---------------------------------------------------------------------------
+# Persistent profiles.json location
+# ---------------------------------------------------------------------------
+# NOTE: previously this was `os.path.join(os.path.dirname(__file__), "profiles.json")`.
+# That is NOT stable in a PyInstaller onefile build: `__file__` for a frozen
+# module resolves inside the onefile extraction temp folder
+# (`%TEMP%\_MEIxxxxxx\`), which gets a brand-new random name every single
+# launch — so every real user's saved profile was silently discarded on
+# their very next app launch. Use a stable, per-user, always-writable
+# location instead, following the same directory-resolution pattern as
+# crash_logging.py's `_default_log_dir()` (LOCALAPPDATA, falling back to
+# TEMP/cwd, never raising). Use the same stable path whether running from
+# source or frozen, for consistency.
+_PROFILES_DIR_NAME = "R9Tools"
+_PROFILES_FILE_NAME = "profiles.json"
+
+# The OLD (pre-fix) location: next to wherever this module lives. For a
+# source run this is the real repo directory (where a user's actual
+# profiles.json may already exist); for a frozen run this was always an
+# ephemeral onefile extraction dir and thus never had anything meaningful
+# to migrate. Kept only so `load()` can migrate a pre-existing file forward
+# one time — never written to going forward.
+_OLD_PROFILES_FILE = os.path.join(os.path.dirname(__file__), _PROFILES_FILE_NAME)
+
+
+def _default_profiles_dir() -> str:
+    """Pick a per-user, reliably-writable directory for profiles.json.
+
+    Mirrors crash_logging.py's `_default_log_dir()`: prefer
+    %LOCALAPPDATA%\\R9Tools, falling back to a temp directory, then finally
+    to the current working directory, if LOCALAPPDATA isn't set for some
+    reason. Never raises.
+    """
+    base = os.environ.get("LOCALAPPDATA")
+    if not base:
+        base = os.environ.get("TEMP") or os.environ.get("TMP") or os.getcwd()
+    return os.path.join(base, _PROFILES_DIR_NAME)
+
+
+PROFILES_FILE = os.path.join(_default_profiles_dir(), _PROFILES_FILE_NAME)
 DEFAULT_NAME = "Default"
+
+
+def _migrate_old_profiles_file_if_needed() -> None:
+    """One-time migration: if the new stable location doesn't have a
+    profiles.json yet, but an old (pre-fix) one exists next to this module,
+    copy it forward instead of silently creating fresh defaults.
+
+    Copies (never moves/deletes) the old file — safer, and it's gitignored
+    regardless so leaving it in place doesn't risk an accidental commit.
+    Safe to call unconditionally; never raises.
+    """
+    try:
+        if os.path.exists(PROFILES_FILE):
+            return
+        if not os.path.exists(_OLD_PROFILES_FILE):
+            return
+        if os.path.abspath(_OLD_PROFILES_FILE) == os.path.abspath(PROFILES_FILE):
+            return
+        os.makedirs(os.path.dirname(PROFILES_FILE), exist_ok=True)
+        shutil.copy2(_OLD_PROFILES_FILE, PROFILES_FILE)
+    except Exception:
+        # Never let migration failure take down the app — worst case it
+        # falls through to load()'s normal "create fresh defaults" path.
+        pass
 
 # ---------------------------------------------------------------------------
 # Sanitization constants
@@ -219,6 +283,8 @@ def _sanitize_profile(profile: dict) -> None:
 
 
 def load() -> dict:
+    _migrate_old_profiles_file_if_needed()
+
     if not os.path.exists(PROFILES_FILE):
         save(copy.deepcopy(_EMPTY))
         return copy.deepcopy(_EMPTY)
@@ -329,6 +395,7 @@ def load() -> dict:
 
 
 def save(data: dict) -> None:
+    os.makedirs(os.path.dirname(PROFILES_FILE), exist_ok=True)
     with open(PROFILES_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
