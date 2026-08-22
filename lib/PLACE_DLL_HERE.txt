@@ -1,14 +1,16 @@
-Copy ALL DLLs from the LHM zip into this directory to enable the Stats overlay.
+LibreHardwareMonitor's DLLs are bundled directly in this folder and committed
+to the R9Tools repository — cloning or downloading the repo gets you
+everything needed for the Stats Overlay automatically. No manual download or
+"Check for Updates" step is required.
 
-Download LHM.zip (not LHM.net10.zip) from:
-  https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases
+LibreHardwareMonitorLib.dll is the main assembly; the rest of the DLLs in
+this folder are its runtime dependencies. stats_poller.py loads everything
+it finds here via Assembly.LoadFrom, so don't remove files from this set
+unless you've confirmed they're no longer required.
 
-Copy every .dll file from the zip into this folder — LibreHardwareMonitorLib.dll
-is the main assembly, and the rest (currently ~30+ files: Aga.Controls,
-HidSharp, Newtonsoft.Json, the System.* polyfills, etc.) are its runtime
-dependencies. The exact set of dependency DLLs changes between LHM releases,
-so don't hand-pick a subset — stats_poller.py loads everything it finds in
-this directory via Assembly.LoadFrom.
+See lib/LICENSE-LibreHardwareMonitor.txt for licensing details (MPL 2.0) —
+these binaries are unmodified, and their source is available at:
+  https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
 
 Also required (pip install):
   pip install pythonnet>=3.0.0

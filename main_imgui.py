@@ -25,12 +25,10 @@ from recoil       import RecoilEngine
 from macro_engine import MacroEngine
 from stats_poller import StatsPoller
 from imgui_overlay import OverlayApp
-from updater import apply_pending_lhm
 
 
 def main():
     setup_logging()
-    apply_pending_lhm()          # move any staged LHM DLLs before engine loads them
     _interception_driver(start=True)
 
     profile_data = prof.load()

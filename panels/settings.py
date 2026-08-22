@@ -22,8 +22,6 @@ class SettingsPanel(Panel):
     # Signals emitted from background threads to update the UI safely
     _sigAppStatus = Signal(str)
     _sigAppBtn    = Signal(str, bool)   # (button_label, enabled)
-    _sigLhmStatus = Signal(str)
-    _sigLhmBtn    = Signal(str, bool)
 
     def __init__(self, parent, settings: dict, onSettingsChanged,
                  onCapture=None, onThemeChanged=None):
@@ -34,7 +32,6 @@ class SettingsPanel(Panel):
         self._onThemeChanged    = onThemeChanged
 
         self._appState     = "idle"
-        self._lhmState     = "idle"
         self._appLatestVer = ""
 
         self._build()
@@ -232,39 +229,30 @@ class SettingsPanel(Panel):
         al.addWidget(self._appActionBtn)
         appCard.layout().addWidget(appRow)
 
-        # LHM update card
-        self._layout.addWidget(_sep())
-        lhmLbl = QLabel("LHM DLLs")
-        lhmLbl.setStyleSheet(
-            f"color: {theme.DIM}; font: bold 8pt 'Segoe UI'; padding: 2px 12px 4px 12px;")
-        self._layout.addWidget(lhmLbl)
-
-        lhmCard = theme.buildCard(self)
-        lhmRow  = QFrame(lhmCard)
-        ll = QHBoxLayout(lhmRow)
-        ll.setContentsMargins(10, 6, 10, 6)
-        ll.setSpacing(6)
-        installed = updater.installed_lhm_version()
-        lhm_ver_text = f"v{installed}" if installed else "Not installed"
-        self._lhmStatusLbl = QLabel(lhm_ver_text, lhmRow)
-        self._lhmStatusLbl.setStyleSheet(f"color: {theme.LABEL_FG};")
-        ll.addWidget(self._lhmStatusLbl, 1)
-        self._lhmActionBtn = QPushButton("Check", lhmRow)
-        self._lhmActionBtn.setFixedWidth(90)
-        self._lhmActionBtn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._lhmActionBtn.clicked.connect(self._lhmBtnClicked)
-        ll.addWidget(self._lhmActionBtn)
-        lhmCard.layout().addWidget(lhmRow)
+        # Manual fallback: always-visible link to the GitHub releases page.
+        # This is independent of the Check/Update/Restart flow above — it
+        # never calls into updater.py and always points at the general
+        # releases page (never a specific tag).
+        appLinkRow = QFrame(appCard)
+        alr = QHBoxLayout(appLinkRow)
+        alr.setContentsMargins(10, 0, 10, 6)
+        alr.setSpacing(6)
+        appLink = QLabel(
+            f'<a href="https://github.com/VenusFallen/R9Tools/releases" '
+            f'style="color:{theme.ACCENT}; text-decoration:none;">'
+            f'View releases on GitHub</a>',
+            appLinkRow)
+        appLink.setOpenExternalLinks(True)
+        appLink.setCursor(Qt.CursorShape.PointingHandCursor)
+        appLink.setStyleSheet(f"color: {theme.DIM}; font: 8pt 'Segoe UI';")
+        alr.addWidget(appLink, 1)
+        appCard.layout().addWidget(appLinkRow)
 
         # Wire up background-thread → UI signals
         self._sigAppStatus.connect(self._appStatusLbl.setText)
         self._sigAppBtn.connect(
             lambda txt, en: (self._appActionBtn.setText(txt),
                              self._appActionBtn.setEnabled(en)))
-        self._sigLhmStatus.connect(self._lhmStatusLbl.setText)
-        self._sigLhmBtn.connect(
-            lambda txt, en: (self._lhmActionBtn.setText(txt),
-                             self._lhmActionBtn.setEnabled(en)))
 
     # ------------------------------------------------------------------
     # Process list
@@ -441,61 +429,6 @@ class SettingsPanel(Panel):
         from PySide6.QtWidgets import QApplication
         updater.restart_app()
         QApplication.instance().quit()
-
-    # ------------------------------------------------------------------
-    # LHM DLL update
-    # ------------------------------------------------------------------
-
-    def _lhmBtnClicked(self):
-        if self._lhmState in ("idle", "up_to_date", "error"):
-            self._startCheckLhm()
-        elif self._lhmState == "available":
-            self._startDownloadLhm()
-        elif self._lhmState == "ready":
-            self._doRestartApp()
-
-    def _startCheckLhm(self):
-        self._lhmState = "checking"
-        self._sigLhmStatus.emit("Checking...")
-        self._sigLhmBtn.emit("...", False)
-        threading.Thread(target=self._doCheckLhm, daemon=True).start()
-
-    def _doCheckLhm(self):
-        try:
-            avail, latest = updater.check_lhm_update()
-            if avail:
-                self._lhmState = "available"
-                self._sigLhmStatus.emit(f"v{latest} available")
-                self._sigLhmBtn.emit("Update", True)
-            else:
-                self._lhmState = "up_to_date"
-                installed = updater.installed_lhm_version()
-                self._sigLhmStatus.emit(f"v{installed} — up to date")
-                self._sigLhmBtn.emit("Check", True)
-        except Exception:
-            self._lhmState = "error"
-            self._sigLhmStatus.emit("Check failed")
-            self._sigLhmBtn.emit("Retry", True)
-
-    def _startDownloadLhm(self):
-        self._lhmState = "downloading"
-        self._sigLhmStatus.emit("Downloading...")
-        self._sigLhmBtn.emit("...", False)
-        threading.Thread(target=self._doDownloadLhm, daemon=True).start()
-
-    def _doDownloadLhm(self):
-        try:
-            def prog(pct):
-                self._sigLhmStatus.emit(f"Downloading... {pct}%")
-            version = updater.download_lhm(prog)
-            self._lhmState = "ready"
-            self._sigLhmStatus.emit(f"v{version} — restart to apply")
-            self._sigLhmBtn.emit("Restart Now", True)
-        except Exception as e:
-            self._lhmState = "error"
-            print(f"[LHM update error] {e}")
-            self._sigLhmStatus.emit(f"Failed: {e}")
-            self._sigLhmBtn.emit("Retry", True)
 
 
 def _sep():

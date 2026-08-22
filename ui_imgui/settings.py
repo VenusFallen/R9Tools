@@ -1,6 +1,7 @@
 """Settings panel — imgui implementation (hotkeys, theme, window filter, updates)."""
 import sys
 import threading
+import webbrowser
 
 import psutil
 
@@ -48,11 +49,6 @@ class SettingsUI(UIPanel):
         self._app_status    = f"v{APP_VERSION}"
         self._app_btn_label = "Check"
         self._app_btn_en    = True
-        self._lhm_state     = "idle"
-        _installed = updater.installed_lhm_version()
-        self._lhm_status    = f"v{_installed}" if _installed else "Not installed"
-        self._lhm_btn_label = "Check"
-        self._lhm_btn_en    = True
 
     def reload(self, settings: dict):
         self._settings = settings
@@ -136,17 +132,11 @@ class SettingsUI(UIPanel):
         if not self._app_btn_en:
             imgui.end_disabled()
 
-        imgui.spacing()
-        # LHM DLLs
-        imgui.text_colored((0.533, 0.533, 0.533, 1.0), "LHM DLLs")
-        imgui.text(self._lhm_status)
-        imgui.same_line()
-        if not self._lhm_btn_en:
-            imgui.begin_disabled()
-        if imgui.button(self._lhm_btn_label + "##lhm_upd"):
-            self._lhm_btn_clicked()
-        if not self._lhm_btn_en:
-            imgui.end_disabled()
+        # Manual fallback: always-visible link to the GitHub releases page,
+        # independent of the Check/Update/Restart flow above. Never calls
+        # into updater.py and always points at the general releases page.
+        if imgui.button("View on GitHub##app_releases"):
+            webbrowser.open("https://github.com/VenusFallen/R9Tools/releases")
 
     # ------------------------------------------------------------------
     # Hotkey row helper
@@ -237,51 +227,3 @@ class SettingsUI(UIPanel):
     def _do_restart(self):
         updater.restart_app()
         self._on_quit()
-
-    def _lhm_btn_clicked(self):
-        if self._lhm_state in ("idle", "up_to_date", "error"):
-            self._start_check_lhm()
-        elif self._lhm_state == "available":
-            self._start_download_lhm()
-        elif self._lhm_state == "ready":
-            self._do_restart()
-
-    def _start_check_lhm(self):
-        self._lhm_state, self._lhm_status = "checking", "Checking..."
-        self._lhm_btn_label, self._lhm_btn_en = "...", False
-        threading.Thread(target=self._do_check_lhm, daemon=True).start()
-
-    def _do_check_lhm(self):
-        try:
-            avail, latest = updater.check_lhm_update()
-            if avail:
-                self._lhm_state  = "available"
-                self._lhm_status = f"v{latest} available"
-                self._lhm_btn_label, self._lhm_btn_en = "Update", True
-            else:
-                installed = updater.installed_lhm_version()
-                self._lhm_state  = "up_to_date"
-                self._lhm_status = f"v{installed} — up to date"
-                self._lhm_btn_label, self._lhm_btn_en = "Check", True
-        except Exception:
-            self._lhm_state  = "error"
-            self._lhm_status = "Check failed"
-            self._lhm_btn_label, self._lhm_btn_en = "Retry", True
-
-    def _start_download_lhm(self):
-        self._lhm_state, self._lhm_status = "downloading", "Downloading..."
-        self._lhm_btn_label, self._lhm_btn_en = "...", False
-        threading.Thread(target=self._do_download_lhm, daemon=True).start()
-
-    def _do_download_lhm(self):
-        try:
-            def prog(pct):
-                self._lhm_status = f"Downloading... {pct}%"
-            version = updater.download_lhm(prog)
-            self._lhm_state  = "ready"
-            self._lhm_status = f"v{version} — restart to apply"
-            self._lhm_btn_label, self._lhm_btn_en = "Restart Now", True
-        except Exception as e:
-            self._lhm_state  = "error"
-            self._lhm_status = f"Failed: {e}"
-            self._lhm_btn_label, self._lhm_btn_en = "Retry", True

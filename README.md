@@ -86,7 +86,7 @@ Small on-screen text that shows which modules are currently active — `R` for R
 
 #### Stats Overlay
 
-Displays a small always-on-top, click-through hardware stats overlay in any corner of the screen. Powered by [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor).
+Displays a small always-on-top, click-through hardware stats overlay in any corner of the screen. Powered by [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor), bundled unmodified under the MPL 2.0 license (`lib/LICENSE-LibreHardwareMonitor.txt`; source available at the link above).
 
 **Metrics (each individually toggleable):**
 
@@ -103,7 +103,7 @@ Displays a small always-on-top, click-through hardware stats overlay in any corn
 - **Text Color** — six presets: White, Yellow, Cyan, Green, Orange, Red
 - The overlay renders with rounded corners and a drop shadow that scales with the background opacity
 
-The overlay requires `LibreHardwareMonitorLib.dll` in the `lib/` folder next to the executable. If it is not present, the Stats panel will show a notice and no data will be displayed. Use the **Check for Updates** button in Settings to download the DLL automatically.
+The overlay requires `LibreHardwareMonitorLib.dll` in the `lib/` folder next to the executable. These DLLs ship bundled with R9Tools by default — no separate download step is needed. If for some reason the `lib/` folder is missing or incomplete, the Stats panel will show a notice and no data will be displayed.
 
 > Stats are collected on a background thread and do not affect overlay or input performance.
 >
@@ -146,9 +146,10 @@ Program-wide configuration accessible from the right side of the top bar.
 **Updates** — check for and apply updates from within the app:
 
 - **R9Tools** — checks the GitHub releases page for a newer version of the executable. Downloads and replaces the running exe; restart to apply.
-- **LibreHardwareMonitor** — checks for a newer compatible LHM release and stages the updated DLLs. Changes take effect on the next launch.
 
 > Updates only work in the packaged `.exe` build. Running from source requires manual updates.
+>
+> LibreHardwareMonitor's DLLs are bundled directly into every R9Tools release, so they always stay in sync with the app version — there's no separate LHM update step.
 
 ---
 
@@ -196,7 +197,7 @@ Download `R9Tools_vX.X.X.zip` from the [Releases](https://github.com/VenusFallen
 
 Reboot after installation, then launch R9Tools as **Administrator**.
 
-To enable the Stats Overlay, open the **Settings** tab and click **Check for Updates** under LibreHardwareMonitor. The DLL will be downloaded and applied automatically on next launch.
+The Stats Overlay works out of the box — LibreHardwareMonitor's DLLs are bundled with the installer, so no additional download is required.
 
 ### Option B — Run from source
 
@@ -217,7 +218,7 @@ To enable the Stats Overlay, open the **Settings** tab and click **Check for Upd
 pip install PySide6 interception-python psutil pywin32 pythonnet
 ```
 
-4. Download the LHM zip (not the `.NET 10` build) from the [LibreHardwareMonitor releases](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases) page and extract **every** `.dll` from it into a `lib/` folder next to `main.py` — `LibreHardwareMonitorLib.dll` is the main assembly, but its dependency DLLs are required too (required for the Stats Overlay; see `lib/PLACE_DLL_HERE.txt`)
+4. LibreHardwareMonitor's DLLs are already committed to the repo's `lib/` folder, so cloning the repository gets you everything needed for the Stats Overlay automatically — no manual download required.
 
 5. Run as **administrator**:
 
