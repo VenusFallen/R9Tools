@@ -197,6 +197,21 @@ def main():
     engine.setToggleCallback(bridge.recoilToggled.emit)
     engine.setStrengthCallback(bridge.strengthChanged.emit)
     engine.setQuitCallback(bridge.quitRequested.emit)
+    # No hotkeys/remaps/macros/mouse-forwarding work at all if this fires —
+    # see RecoilEngine._bringUpInterception(). Already logged critically from
+    # the listen thread itself; this is just an additional, guaranteed-to-run
+    # main-thread breadcrumb in case logging setup itself is degraded.
+    # TODO(ui-agent): consider a dedicated bridge Signal + DX11 overlay
+    # "input engine failed" indicator here rather than only a log line —
+    # left as a follow-up, this callback hook is the wiring point for it.
+    engine.setInputFailedCallback(
+        lambda: logging.critical(
+            "R9Tools input engine failed to start — the app is running but "
+            "no hotkeys, remaps, macros, or recoil compensation will work "
+            "this session. See earlier log entries for the Interception "
+            "driver bring-up failure."
+        )
+    )
 
     # StatsPoller → bridge (poller thread → main thread via QueuedConnection)
     stats_poller.setCallback(bridge.statsUpdated.emit)

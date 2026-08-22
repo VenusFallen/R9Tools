@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 import random
@@ -135,6 +136,13 @@ class RecoilEngine:
         self._overlayCallback     = None
         self._strengthCallback    = None
         self._quitCallback        = None
+        self._inputFailedCallback = None
+        self.inputEngineFailed    = False  # True once _listenLoop gives up bringing
+                                            # up the Interception driver context — see
+                                            # _bringUpInterception(). UI layer may poll
+                                            # this / hook setInputFailedCallback() to
+                                            # surface a visible "input engine failed"
+                                            # indicator; not wired to any UI here.
         self._hotkeysSuspended    = False
         self._strengthHoldEvents: dict = {}   # "down"/"up" → threading.Event
         self._remapActive: dict = {}           # sig tuple → to_input dict
@@ -178,6 +186,14 @@ class RecoilEngine:
 
     def setQuitCallback(self, cb):
         self._quitCallback = cb
+
+    def setInputFailedCallback(self, cb):
+        """cb() is called (from the listen thread) if the Interception driver
+        context can't be brought up after exhausting retries — see
+        _bringUpInterception(). No hotkeys/remaps/macros/mouse-forwarding
+        work at all when this happens, so this is a hard, user-visible-worthy
+        failure, not a transient hiccup."""
+        self._inputFailedCallback = cb
 
     def setMacroEngine(self, engine):
         self._macroEngine = engine
@@ -399,60 +415,164 @@ class RecoilEngine:
     # Listen loop
     # ------------------------------------------------------------------
 
+    # Bounded retry budget for bringing up the Interception driver context at
+    # startup — see _bringUpInterception() for why this is needed at all.
+    # ~20 attempts x up to 250ms backoff caps out around 10s worst case,
+    # which comfortably covers observed driver-service-start settling time
+    # without hanging the app indefinitely if the driver is genuinely dead
+    # (e.g. blocked by security software, never installed, etc.).
+    _INTERCEPTION_BRINGUP_ATTEMPTS = 20
+    _INTERCEPTION_BRINGUP_BASE_DELAY = 0.05  # seconds, doubles each retry up to a cap
+    _INTERCEPTION_BRINGUP_MAX_DELAY = 0.5
+
+    def _bringUpInterception(self):
+        """Construct an interception.Interception() context and apply the
+        keyboard/mouse filters, retrying with backoff on failure.
+
+        Why this exists: interception-python's Interception.__init__() opens
+        handles to all 20 possible device slots (\\\\.\\interceptionNN) and
+        silently swallows any exception raised while doing so (it catches
+        Exception and just calls self.destroy(), leaving self._devices
+        however-far it got — possibly empty, possibly a partial list shorter
+        than the 20 slots callers assume). Interception.set_filter() then
+        indexes self._devices[i] for i in range(20) with zero bounds
+        checking, so any transient failure to open even one device handle
+        turns into an unhandled IndexError the instant set_filter() runs.
+
+        This has been observed in the wild as a fresh-install-time crash:
+        _interception_driver(start=True) in main.py does a blocking
+        `sc start` on the keyboard_filter/mouse_filter driver services, but
+        `sc start` only guarantees the driver's service reached
+        SERVICE_RUNNING — it does not guarantee the driver has finished
+        attaching to the keyboard/mouse device stacks and exposing all 20
+        \\\\.\\interceptionNN handles as openable, especially right after a
+        fresh driver install where there's more one-time setup happening
+        than a routine start/stop of an already-settled driver. Retrying
+        with a short backoff gives that settling window a chance to close
+        before giving up.
+
+        Returns the ready Interception instance, or None if every retry was
+        exhausted (driver never came up in time / at all).
+        """
+        delay = self._INTERCEPTION_BRINGUP_BASE_DELAY
+        lastErr = None
+        for attempt in range(1, self._INTERCEPTION_BRINGUP_ATTEMPTS + 1):
+            inter = None
+            try:
+                inter = interception.Interception()
+                # A fully-settled driver context always has all 20 device
+                # slots open (see docstring above) — a short list here means
+                # get_handles() hit a failure partway through and the
+                # exception was swallowed internally, i.e. this context is
+                # unusable even though construction "succeeded".
+                if len(inter._devices) < 20:
+                    raise RuntimeError(
+                        f"Interception context incomplete: "
+                        f"{len(inter._devices)}/20 device handles opened"
+                    )
+                inter.set_filter(
+                    inter.is_mouse,
+                    interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL
+                )
+                inter.set_filter(
+                    inter.is_keyboard,
+                    interception.FilterKeyFlag.FILTER_KEY_ALL
+                )
+                if attempt > 1:
+                    logging.getLogger("r9tools.recoil").warning(
+                        "Interception driver context came up on attempt %d/%d",
+                        attempt, self._INTERCEPTION_BRINGUP_ATTEMPTS,
+                    )
+                return inter
+            except Exception as exc:
+                lastErr = exc
+                if inter is not None:
+                    try:
+                        inter.destroy()
+                    except Exception:
+                        pass
+                if not self._running:
+                    return None  # stop() was called while we were retrying
+                time.sleep(delay)
+                delay = min(delay * 2, self._INTERCEPTION_BRINGUP_MAX_DELAY)
+
+        logging.getLogger("r9tools.recoil").critical(
+            "Interception driver context failed to come up after %d attempts "
+            "— input engine cannot start (no hotkeys, remaps, macros, or "
+            "recoil will work this session). Last error: %r",
+            self._INTERCEPTION_BRINGUP_ATTEMPTS, lastErr,
+        )
+        return None
+
     def _listenLoop(self):
-        inter = interception.Interception()
-        inter.set_filter(
-            inter.is_mouse,
-            interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL
-        )
-        inter.set_filter(
-            inter.is_keyboard,
-            interception.FilterKeyFlag.FILTER_KEY_ALL
-        )
+        inter = self._bringUpInterception()
+        if inter is None:
+            self.inputEngineFailed = True
+            if self._inputFailedCallback:
+                try:
+                    self._inputFailedCallback()
+                except Exception:
+                    logging.getLogger("r9tools.recoil").exception(
+                        "inputFailedCallback raised"
+                    )
+            return
 
         while self._running:
-            deviceIdx = inter.await_input(100)
-            if deviceIdx is None:
-                continue
+            try:
+                deviceIdx = inter.await_input(100)
+                if deviceIdx is None:
+                    continue
 
-            if deviceIdx >= len(inter._devices):
-                continue
-            device = inter._devices[deviceIdx]
-            stroke = device.receive()
-            if stroke is None:
-                continue
+                if deviceIdx >= len(inter._devices):
+                    continue
+                device = inter._devices[deviceIdx]
+                stroke = device.receive()
+                if stroke is None:
+                    continue
 
-            # Track devices for use in synthesis
-            is_kb = inter.is_keyboard(deviceIdx)
-            if is_kb:
-                self._kbDevice = device
-            elif inter.is_mouse(deviceIdx):
-                self._msDevice = device
+                # Track devices for use in synthesis
+                is_kb = inter.is_keyboard(deviceIdx)
+                if is_kb:
+                    self._kbDevice = device
+                elif inter.is_mouse(deviceIdx):
+                    self._msDevice = device
 
-            # Keep macro engine device refs current (only when they actually change)
-            if self._macroEngine:
-                if (self._kbDevice is not self._lastKbDevice
-                        or self._msDevice is not self._lastMsDevice):
-                    self._lastKbDevice = self._kbDevice
-                    self._lastMsDevice = self._msDevice
-                    self._macroEngine.setDevices(self._kbDevice, self._msDevice)
+                # Keep macro engine device refs current (only when they actually change)
+                if self._macroEngine:
+                    if (self._kbDevice is not self._lastKbDevice
+                            or self._msDevice is not self._lastMsDevice):
+                        self._lastKbDevice = self._kbDevice
+                        self._lastMsDevice = self._msDevice
+                        self._macroEngine.setDevices(self._kbDevice, self._msDevice)
 
-            is_e0 = False
-            if isinstance(stroke, interception.KeyStroke):
-                is_e0 = bool(stroke.flags & interception.KeyFlag.KEY_E0)
+                is_e0 = False
+                if isinstance(stroke, interception.KeyStroke):
+                    is_e0 = bool(stroke.flags & interception.KeyFlag.KEY_E0)
 
-            suppress = False
-            if isinstance(stroke, interception.MouseStroke):
-                suppress = self._handleMouseStroke(stroke, inter)
-            elif isinstance(stroke, interception.KeyStroke):
-                suppress = self._handleKeyboardStroke(stroke, inter)
+                suppress = False
+                if isinstance(stroke, interception.MouseStroke):
+                    suppress = self._handleMouseStroke(stroke, inter)
+                elif isinstance(stroke, interception.KeyStroke):
+                    suppress = self._handleKeyboardStroke(stroke, inter)
 
-            # Macro trigger detection — never suppresses, fires as side effect
-            if self._macroEngine:
-                self._macroEngine.handleStroke(stroke, is_kb, is_e0)
+                # Macro trigger detection — never suppresses, fires as side effect
+                if self._macroEngine:
+                    self._macroEngine.handleStroke(stroke, is_kb, is_e0)
 
-            if not suppress:
-                device.send(stroke)
+                if not suppress:
+                    device.send(stroke)
+            except Exception:
+                # Never let a single bad stroke/handler bug take the whole
+                # input thread down silently (see IndexError crash this
+                # guards against at startup, and the general "unhandled
+                # exception on background thread just kills it with no
+                # visible sign" failure mode). Log and keep listening —
+                # losing one iteration is far better than losing all input
+                # forwarding, hotkeys, remaps, and macros for the rest of
+                # the session.
+                logging.getLogger("r9tools.recoil").exception(
+                    "Unhandled error in _listenLoop iteration — continuing"
+                )
 
     def _handleMouseStroke(self, stroke, inter) -> bool:
         # A button/direction whose signature currently resolves to an active
