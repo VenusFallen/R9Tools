@@ -3,8 +3,6 @@ __pycache__/
 *.py[cod]
 *.pyo
 
-tests/
-
 # Virtual environments
 .venv/
 venv/
@@ -31,8 +29,10 @@ installer_assets/
 # Local assets (icons etc.)
 assets/
 
-# Inno Setup script
+# Inno Setup script (R9Tools.iss is tracked — it contains hand-written
+# install/update logic, not just build config; other .iss files stay ignored)
 *.iss
+!R9Tools.iss
 
 # LHM DLLs are bundled directly in lib/ and committed to the repo (MPL 2.0
 # compliant, unmodified binaries) — nothing under lib/ is ignored.

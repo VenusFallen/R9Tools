@@ -2,9 +2,35 @@
 R9Tools — imgui + Direct3D 11 entry point.
 Run as administrator (required for Interception driver).
 
-Replaces the PySide6 frontend with a single full-screen DX11 overlay window
-that is eligible for hardware Multi-Plane Overlay (MPO), eliminating the
-196→147 FPS regression caused by WS_EX_LAYERED GDI redirection surfaces.
+*** FROZEN / EXPERIMENTAL — NOT SHIPPED — NOT MAINTAINED ***
+This is an alternate UI implementation (this file, ui_imgui/, imgui_overlay.py,
+imgui_backend.py) that is NOT built or launched by anything currently shipping.
+The shipped app is main.py, using the PySide6 + DX11Overlay stack. main.py does
+not import from this stack, and R9Tools.spec does not build from it.
+
+It is intentionally kept (not deleted) as a potential fallback — specifically,
+this stack avoids WS_EX_LAYERED (using WM_NCHITTEST alone for click-through)
+because of a previously measured 196->147 FPS regression attributed to that
+flag. The shipped stack (dx11_overlay.py) later added WS_EX_LAYERED back to
+fix a click-through bug, and as of this writing has NOT verified whether that
+FPS regression actually reproduces on the shipped window architecture in a
+GPU-bound game (see the "KNOWN TRADEOFF — NOT YET VERIFIED" comment block in
+dx11_overlay.py's _create_window). If that tradeoff ever turns out to be a
+real problem for the shipped stack, this WM_NCHITTEST-only approach is the
+documented alternative to fall back to or investigate further — though note
+dx11_overlay.py's own comments record that a live SendInput test found
+WM_NCHITTEST-alone did NOT reliably achieve real click-through on that
+window architecture, so this stack's click-through has not been independently
+re-verified as actually working either.
+
+Because this stack is frozen, it has been allowed to drift behind main.py and
+does NOT have feature parity as of this point in the project. Known gaps
+include (non-exhaustive): no FPS tracking, no running indicator, no
+auto-update-check, and its recoil strength slider is still hardcoded to the
+old 1-20 range instead of the current 1-99 range used by the shipped stack.
+Do not "fix" these gaps to chase parity — this snapshot is deliberately not
+actively maintained. Any future work reviving this stack should treat it as
+a full re-sync against main.py, not an incremental patch.
 """
 import subprocess
 import sys

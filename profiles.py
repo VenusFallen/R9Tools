@@ -151,6 +151,7 @@ _DEFAULT_SETTINGS = {
         "show_gpu_temp":  True,
         "show_gpu_vram":  True,
         "show_ram":       True,
+        "show_fps":       True,
         "bg_alpha":       70,
         "text_color":     "#ffffff",
     },
@@ -186,7 +187,7 @@ def _sanitize_profile(profile: dict) -> None:
     for w in rc["weapons"]:
         if not isinstance(w, dict):
             continue
-        w["strength_y"] = _clamp_int(w.get("strength_y", 5), 1, 30, 5)
+        w["strength_y"] = _clamp_int(w.get("strength_y", 5), 1, 99, 5)
         clean_weapons.append(w)
     if not clean_weapons:
         clean_weapons = [{"strength_y": 5}]
@@ -251,7 +252,7 @@ def _sanitize_profile(profile: dict) -> None:
     if st.get("corner") not in _VALID_CORNERS:
         st["corner"] = "top_right"
     for metric in ("show_cpu_usage", "show_cpu_temp", "show_gpu_usage",
-                   "show_gpu_temp", "show_gpu_vram", "show_ram"):
+                   "show_gpu_temp", "show_gpu_vram", "show_ram", "show_fps"):
         st[metric] = bool(st.get(metric, True))
     st["bg_alpha"] = _clamp_int(st.get("bg_alpha", 70), 0, 100, 70)
     _VALID_TEXT_COLORS = {"#ffffff", "#ffff00", "#00ffff", "#00ff00", "#ff8c00", "#ff4444"}

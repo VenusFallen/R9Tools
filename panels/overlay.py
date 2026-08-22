@@ -40,6 +40,7 @@ _STATS_CORNERS = [
 ]
 
 _STATS_METRICS = [
+    ("show_fps",       "FPS"),
     ("show_cpu_usage", "CPU Usage"),
     ("show_cpu_temp",  "CPU Temp"),
     ("show_gpu_usage", "GPU Usage"),
@@ -61,6 +62,7 @@ _STATS_DEFAULT = {
     "enabled":        False,
     "corner":         "top_right",
     "update_rate_hz": 1,
+    "show_fps":       True,
     "show_cpu_usage": True,
     "show_cpu_temp":  True,
     "show_gpu_usage": True,

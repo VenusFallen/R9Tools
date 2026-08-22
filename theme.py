@@ -4,7 +4,7 @@ Imported by all panel modules and by panel_window.py.
 """
 import threading
 
-from PySide6.QtCore import Qt, QTimer, QPoint, Signal, Slot, QEvent
+from PySide6.QtCore import Qt, QTimer, QPoint, Signal, Slot
 from PySide6.QtGui  import QPainter, QColor
 from PySide6.QtWidgets import (
     QWidget, QFrame, QHBoxLayout, QVBoxLayout,
@@ -19,8 +19,7 @@ TOPBAR_MARGIN_TOP   = 8
 TOPBAR_MARGIN_SIDE  = 12
 TOPBAR_MARGIN_BOTTOM = 4
 TOPBAR_RADIUS       = 10
-PANEL_W             = 260   # content width; window is PANEL_W + SHADOW_SIZE wide
-SHADOW_SIZE         = 10    # extra pixels for drop shadow (right + bottom)
+PANEL_W             = 260   # content width
 
 FLASH_SAVE   = "#44ff88"
 FLASH_LOAD   = "#4488ff"
@@ -98,8 +97,6 @@ TAB_HOVER_BG = THEMES["Dark"]["TAB_HOVER_BG"]
 # ---------------------------------------------------------------------------
 # Input constants
 # ---------------------------------------------------------------------------
-MOUSE_KEYS = {"mouse_left", "mouse_right", "mouse_middle"}
-
 KEY_LABELS = {
     "mouse_left":   "LMB",
     "mouse_right":  "RMB",
@@ -312,7 +309,6 @@ class ToggleSwitch(QWidget):
         self._target         = self._knobX
         self._step           = 0.0
         self._remain         = 0
-        self._captureSuccess = False   # guard used by KeybindButton (not this class)
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)

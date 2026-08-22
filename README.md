@@ -94,6 +94,9 @@ Displays a small always-on-top, click-through hardware stats overlay in any corn
 - GPU usage % and temperature °C (shown on one line when both enabled)
 - GPU VRAM used / total (GB)
 - RAM used / total (GB)
+- FPS of whichever window currently has focus — like the rest of Stats Overlay, this always tracks real OS focus and is **not** scoped by the Window Filter setting
+
+**A note on CPU temperature:** R9Tools deliberately runs LibreHardwareMonitor with its optional kernel driver disabled (`Ring0` off). That driver is what some sensors need for direct hardware register access, and enabling it means shipping a WinRing0-based driver — a known, actively-enforced entry on Microsoft's Vulnerable Driver Blocklist that can get flagged and quarantined by Windows Defender. Avoiding it is a deliberate security/compatibility tradeoff, not a bug: on some hardware (confirmed on an AMD Ryzen 7 7700X test machine) this means **CPU temperature may not be available**, since reading it can require that same low-level access on any CPU vendor, Intel included. Everything else — CPU usage %, RAM, and all GPU metrics (usage, temperature, VRAM) — is unaffected, since NVIDIA and AMD both expose GPU sensors through their own proper user-mode APIs (NVAPI/ADL) that don't need this driver at all. If CPU temperature shows as unavailable on your machine, this is expected behavior, not something to report as a bug.
 
 **Configuration:**
 
@@ -104,6 +107,8 @@ Displays a small always-on-top, click-through hardware stats overlay in any corn
 - The overlay renders with rounded corners and a drop shadow that scales with the background opacity
 
 The overlay requires `LibreHardwareMonitorLib.dll` in the `lib/` folder next to the executable. These DLLs ship bundled with R9Tools by default — no separate download step is needed. If for some reason the `lib/` folder is missing or incomplete, the Stats panel will show a notice and no data will be displayed.
+
+FPS tracking is powered by a bundled copy of Intel's [PresentMon](https://github.com/GameTechDev/PresentMon), MIT licensed and unmodified (`presentmon/LICENSE-PresentMon.txt`; source available at the link above). It reads frame-present timing passively via Windows' own tracing mechanism — unlike some FPS overlay tools, it does not inject any code into the target game.
 
 > Stats are collected on a background thread and do not affect overlay or input performance.
 >
