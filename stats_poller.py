@@ -20,15 +20,8 @@ _SensorType    = None
 def _bootstrap():
     global _lhm_available, _Computer, _SensorType
     try:
-        # Apply any staged LHM DLLs from a previous update before loading anything
-        try:
-            import updater as _upd
-            _upd.apply_pending_lhm()
-        except Exception:
-            pass
-
-        # Prefer persistent lib/ next to the exe (allows LHM self-update without
-        # rebuilding).  Fall back to the bundled copy inside sys._MEIPASS.
+        # Prefer persistent lib/ next to the exe (allows dropping in newer DLLs
+        # without rebuilding).  Fall back to the bundled copy inside sys._MEIPASS.
         if getattr(sys, "frozen", False):
             _persistent = Path(sys.executable).parent / "lib"
             _bundled    = Path(sys._MEIPASS) / "lib"

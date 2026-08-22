@@ -760,6 +760,28 @@ class Renderer:
             y1 = cy + math.sin(a1) * radius
             self.draw_line(x0, y0, x1, y1, thickness, col)
 
+    def draw_arc(self, cx: float, cy: float, radius: float,
+                start_deg: float, end_deg: float, col: tuple,
+                thickness: float = 1.5, segments: int = 24):
+        """Hollow circular arc from start_deg to end_deg (degrees, measured
+        clockwise starting straight up — 0 deg = 12 o'clock — regardless of
+        the underlying y-down screen coordinate system). Used for icon-style
+        rings with a gap (e.g. the running-indicator power-button badge)."""
+        span = end_deg - start_deg
+        if span <= 0:
+            return
+        n = max(1, int(round(segments * span / 360.0)))
+        step = math.radians(span) / n
+        start_rad = math.radians(start_deg)
+        for i in range(n):
+            a0 = start_rad + i * step
+            a1 = start_rad + (i + 1) * step
+            x0 = cx + math.sin(a0) * radius
+            y0 = cy - math.cos(a0) * radius
+            x1 = cx + math.sin(a1) * radius
+            y1 = cy - math.cos(a1) * radius
+            self.draw_line(x0, y0, x1, y1, thickness, col)
+
     def draw_circle_filled(self, cx: float, cy: float, radius: float,
                            col: tuple, segments: int = 48):
         """Filled circle as triangle fan."""
@@ -779,6 +801,18 @@ class Renderer:
     # ------------------------------------------------------------------
     # Text rendering
     # ------------------------------------------------------------------
+
+    def measure_text(self, text: str, font_size: int = 14,
+                     font_face: str = "Consolas") -> tuple[int, int]:
+        """Measure (width, height) in pixels without drawing — use to center
+        short labels before calling draw_text()."""
+        if not text:
+            return 0, 0
+        try:
+            return _gdi_measure_text(text, font_size, font_face)
+        except Exception as exc:
+            print(f"[Renderer] measure_text failed for {text!r}: {exc}")
+            return 0, 0
 
     def draw_text(self, text: str, x: float, y: float, col: tuple,
                   font_size: int = 14, font_face: str = "Consolas"):
@@ -971,6 +1005,27 @@ class _BITMAPINFOHEADER(Structure):
 
 class _BITMAPINFO(Structure):
     _fields_ = [("bmiHeader", _BITMAPINFOHEADER), ("bmiColors", c_uint * 3)]
+
+
+def _gdi_measure_text(text: str, font_size: int, font_face: str) -> tuple[int, int]:
+    """Measure (width, height) in pixels for *text* at font_size/font_face
+    without rasterizing it — used to pre-center short badge labels (e.g. the
+    running-indicator's 'R9') before the real draw_text() call."""
+    screen_dc = ctypes.windll.user32.GetDC(None)
+    mem_dc    = _CreateCompatibleDC(screen_dc)
+    hfont = _CreateFontW(
+        -font_size, 0, 0, 0,
+        400, 0, 0, 0, 0, 0, 0, 2, 0,
+        font_face,
+    )
+    old_font = _SelectObject(mem_dc, hfont)
+    sz = _SIZE()
+    _GetTextExtentPoint32W(mem_dc, text, len(text), ctypes.addressof(sz))
+    _SelectObject(mem_dc, old_font)
+    _DeleteObject(hfont)
+    _DeleteDC(mem_dc)
+    ctypes.windll.user32.ReleaseDC(None, screen_dc)
+    return max(sz.cx, 1), max(sz.cy, 1)
 
 
 def _gdi_text_to_srv(device: int, text: str, font_size: int,

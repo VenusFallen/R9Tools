@@ -10,6 +10,10 @@ DEFAULT_NAME = "Default"
 # ---------------------------------------------------------------------------
 
 _VALID_CROSSHAIR_STYLES = {"dot", "cross", "dot_cross", "circle", "circle_dot"}
+_VALID_INDICATOR_POSITIONS = {
+    "top_left", "top_right", "bottom_left", "bottom_right",
+    "above_crosshair", "below_crosshair",
+}
 _VALID_MACRO_MODES      = {"once", "hold", "toggle"}
 _VALID_MACRO_ACTIONS    = {"key_tap", "key_down", "key_up",
                            "mouse_click", "mouse_down", "mouse_up", "delay"}
@@ -52,6 +56,18 @@ _DEFAULT_SETTINGS = {
         "slot_keys":    [],
         "interval_ms":  100,
         "humanize":     False,
+    },
+    "indicator": {
+        "enabled": True,
+        "position": "below_crosshair",
+    },
+    # Simple "app is alive" badge — deliberately separate from the module
+    # indicator (R / RF) block above. No position option (always top-right).
+    # Defaults on (unlike recoil/crosshair/remapper/RF) since it's a low-risk
+    # informational badge meant to help exactly the non-technical users who'd
+    # otherwise not know whether R9Tools loaded.
+    "running_indicator": {
+        "enabled": True,
     },
     "macros": [],
     "stats": {
@@ -114,6 +130,17 @@ def _sanitize_profile(profile: dict) -> None:
     ch["thickness"]    = _clamp_int(ch.get("thickness", 2),    1,   20,  2)
     ch["gap"]          = _clamp_int(ch.get("gap", 3),          0,   50,  3)
     ch["outline_size"] = _clamp_int(ch.get("outline_size", 1), 0,   10,  1)
+
+    # Module indicators (R / RF labels)
+    ind = profile.get("indicator", {})
+    ind["enabled"] = bool(ind.get("enabled", True))
+    if ind.get("position") not in _VALID_INDICATOR_POSITIONS:
+        ind["position"] = "below_crosshair"
+
+    # Running indicator ("R9Tools is loaded" badge) — separate from the
+    # module indicator above. No other fields to sanitize.
+    ri = profile.get("running_indicator", {})
+    ri["enabled"] = bool(ri.get("enabled", True))
 
     # Hotkeys — each value must be {"code": 0-255, "e0": bool}
     hk = profile.get("hotkeys", {})
@@ -215,6 +242,19 @@ def load() -> dict:
         for key, val in _DEFAULT_SETTINGS["crosshair"].items():
             profile["crosshair"].setdefault(key, val)
 
+        # Migrate module indicator settings (new — backfill defaults for older
+        # profiles.json entries that predate the indicator settings block)
+        profile.setdefault("indicator", copy.deepcopy(_DEFAULT_SETTINGS["indicator"]))
+        for key, val in _DEFAULT_SETTINGS["indicator"].items():
+            profile["indicator"].setdefault(key, val)
+
+        # Migrate running indicator settings (new — "R9Tools is loaded" badge,
+        # separate from the module indicator block above; backfill defaults
+        # for profiles.json entries that predate this feature).
+        profile.setdefault("running_indicator", copy.deepcopy(_DEFAULT_SETTINGS["running_indicator"]))
+        for key, val in _DEFAULT_SETTINGS["running_indicator"].items():
+            profile["running_indicator"].setdefault(key, val)
+
         # Migrate hotkeys: promote old recoil.toggle_key int → hotkeys.recoil_toggle dict
         old_toggle = profile.get("recoil", {}).pop("toggle_key", None)
         profile.setdefault("hotkeys", copy.deepcopy(_DEFAULT_SETTINGS["hotkeys"]))
@@ -310,6 +350,13 @@ def loadProfile(data: dict, name: str) -> dict | None:
     settings["remapper"]["enabled"]  = False
     settings.setdefault("stats", copy.deepcopy(_DEFAULT_SETTINGS["stats"]))
     settings["stats"]["enabled"]     = False
+    settings.setdefault("indicator", copy.deepcopy(_DEFAULT_SETTINGS["indicator"]))
+    settings["indicator"]["enabled"] = False
+    # running_indicator is intentionally NOT forced off here — unlike the
+    # other overlay toggles above, forcing this off on profile load would
+    # defeat its purpose (confirming R9Tools loaded). It just keeps
+    # whatever the profile's saved setting was.
+    settings.setdefault("running_indicator", copy.deepcopy(_DEFAULT_SETTINGS["running_indicator"]))
     settings.setdefault("rapidfire", copy.deepcopy(_DEFAULT_SETTINGS["rapidfire"]))
     settings["rapidfire"]["enabled"] = False
     settings.setdefault("macros", [])

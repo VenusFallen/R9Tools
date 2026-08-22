@@ -9,6 +9,8 @@ that is eligible for hardware Multi-Plane Overlay (MPO), eliminating the
 import subprocess
 import sys
 
+from crash_logging import setup_logging
+
 _INTERCEPTION_SERVICES = ["keyboard_filter", "mouse_filter"]
 
 
@@ -23,11 +25,10 @@ from recoil       import RecoilEngine
 from macro_engine import MacroEngine
 from stats_poller import StatsPoller
 from imgui_overlay import OverlayApp
-from updater import apply_pending_lhm
 
 
 def main():
-    apply_pending_lhm()          # move any staged LHM DLLs before engine loads them
+    setup_logging()
     _interception_driver(start=True)
 
     profile_data = prof.load()

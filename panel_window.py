@@ -4,7 +4,10 @@ Implemented as two coordinated windows:
   _TopBarWindow  — full-screen-width topbar strip (separate window)
   PanelWindow    — PANEL_W-wide content area, hides when collapsed
 """
-from PySide6.QtCore import Qt, QTimer, Slot
+import ctypes
+import ctypes.wintypes as wintypes
+
+from PySide6.QtCore import Qt, QAbstractNativeEventFilter, QTimer, Slot
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QPushButton,
@@ -17,26 +20,62 @@ from theme import (PANEL_W, TOPBAR_H, TOPBAR_MARGIN_TOP, TOPBAR_MARGIN_SIDE,
                    TOPBAR_MARGIN_BOTTOM, TOPBAR_RADIUS)
 
 from panels.recoil    import RecoilPanel
-from panels.crosshair import CrosshairPanel
+from panels.overlay   import OverlayPanel
 from panels.remapper  import RemapperPanel
 from panels.profiles  import ProfilesPanel
 from panels.settings  import SettingsPanel
 from panels.macros    import MacrosPanel
-from panels.stats     import StatsPanel
 
 _TAB_RECOIL    = 0
-_TAB_CROSSHAIR = 1
+_TAB_OVERLAY   = 1
 _TAB_REMAPPER  = 2
 _TAB_MACROS    = 3
-_TAB_STATS     = 4
-_TAB_PROFILES  = 5
-_TAB_SETTINGS  = 6
+_TAB_PROFILES  = 4
+_TAB_SETTINGS  = 5
 
 _WIN_FLAGS = (
     Qt.WindowType.FramelessWindowHint
     | Qt.WindowType.WindowStaysOnTopHint
     | Qt.WindowType.Tool
 )
+
+_WM_DISPLAYCHANGE = 0x007E
+
+
+# ---------------------------------------------------------------------------
+# Display-resolution-change watcher
+# ---------------------------------------------------------------------------
+
+class _DisplayChangeFilter(QAbstractNativeEventFilter):
+    """Watches raw Win32 messages for WM_DISPLAYCHANGE so the topbar/panel
+    can react to a live resolution change (e.g. a game switching into a
+    custom exclusive-fullscreen resolution) without requiring an app
+    restart.
+
+    QScreen's own Qt-side signals (geometryChanged / primaryScreenChanged)
+    are the idiomatic Qt mechanism for this, but they are not reliably
+    emitted on Windows for a resolution change driven by another process's
+    exclusive-fullscreen mode switch — that path goes through
+    ChangeDisplaySettings and broadcasts WM_DISPLAYCHANGE directly, which
+    Qt's own screen-tracking may or may not pick up promptly depending on
+    Qt/driver version. Hooking the raw message is the same fix already
+    applied to dx11_overlay.py's window and is the more dependable of the
+    two for this specific case, so it's used here instead of relying on
+    QScreen alone."""
+
+    def __init__(self, onChange):
+        super().__init__()
+        self._onChange = onChange
+
+    def nativeEventFilter(self, eventType, message):
+        if eventType in (b"windows_generic_MSG", "windows_generic_MSG"):
+            try:
+                msg = wintypes.MSG.from_address(int(message))
+            except (ValueError, TypeError, OSError):
+                return False, 0
+            if msg.message == _WM_DISPLAYCHANGE:
+                self._onChange()
+        return False, 0
 
 
 # ---------------------------------------------------------------------------
@@ -80,12 +119,18 @@ class _TopBarWindow(QWidget):
         self._build()
         self._applyBarStyle()
 
+        # Keep a reference — QAbstractNativeEventFilter instances must stay
+        # alive for as long as they're installed, and there's only ever one
+        # _TopBarWindow for the app's lifetime so installing once here is
+        # sufficient (no risk of double-installing across multiple windows).
+        self._displayFilter = _DisplayChangeFilter(self._onDisplayChange)
+        QApplication.instance().installNativeEventFilter(self._displayFilter)
+
     def _build(self):
-        for label, index in [("WEAPON",    _TAB_RECOIL),
-                              ("CROSSHAIR", _TAB_CROSSHAIR),
-                              ("REMAPPER",  _TAB_REMAPPER),
-                              ("MACROS",    _TAB_MACROS),
-                              ("STATS",     _TAB_STATS)]:
+        for label, index in [("WEAPON",   _TAB_RECOIL),
+                              ("OVERLAY",  _TAB_OVERLAY),
+                              ("REMAPPER", _TAB_REMAPPER),
+                              ("MACROS",   _TAB_MACROS)]:
             self._barLayout.addWidget(self._makeTabButton(label, index))
 
         self._barLayout.addStretch()
@@ -128,6 +173,23 @@ class _TopBarWindow(QWidget):
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawPath(path)
         p.end()
+
+    # ------------------------------------------------------------------
+    # Resolution-change reactivity
+    # ------------------------------------------------------------------
+
+    def _onDisplayChange(self):
+        """Re-query the (possibly changed) primary-monitor width and resize/
+        reposition the full-width topbar to match; also nudges PanelWindow
+        to reposition itself (right-anchored tabs' x-offset depends on
+        screen width too) in case it happens to be visible at the moment
+        the resolution changes."""
+        screenW = QApplication.primaryScreen().geometry().width()
+        totalH  = TOPBAR_MARGIN_TOP + TOPBAR_H + TOPBAR_MARGIN_BOTTOM
+        self.setFixedSize(screenW, totalH)
+        self.move(0, 0)
+        self.update()
+        self._panelWin._reposition()
 
     # ------------------------------------------------------------------
     # Public interface used by PanelWindow
@@ -198,6 +260,24 @@ class _RoundedFrame(QFrame):
     pass
 
 
+class _ContentStack(QStackedWidget):
+    """QStackedWidget whose sizeHint reflects only the current page.
+
+    Qt's QStackedLayout computes sizeHint()/minimumSizeHint() as the max over
+    ALL pages ever added, regardless of which one is current or their size
+    policy. That means a window sized via adjustSize() never shrinks back
+    down after a larger tab has been shown once. Overriding these two hints
+    to defer to currentWidget() fixes that at the source, for every tab."""
+
+    def sizeHint(self):
+        w = self.currentWidget()
+        return w.sizeHint() if w is not None else super().sizeHint()
+
+    def minimumSizeHint(self):
+        w = self.currentWidget()
+        return w.minimumSizeHint() if w is not None else super().minimumSizeHint()
+
+
 # ---------------------------------------------------------------------------
 # Panel content window
 # ---------------------------------------------------------------------------
@@ -211,8 +291,8 @@ class PanelWindow(QWidget):
         self._engine           = engine
         self._macroEngine      = macroEngine
         self._settingsCallback = onSettingsChanged
-        _valid_tabs = {_TAB_RECOIL, _TAB_CROSSHAIR, _TAB_REMAPPER,
-                       _TAB_MACROS, _TAB_STATS, _TAB_PROFILES, _TAB_SETTINGS}
+        _valid_tabs = {_TAB_RECOIL, _TAB_OVERLAY, _TAB_REMAPPER,
+                       _TAB_MACROS, _TAB_PROFILES, _TAB_SETTINGS}
         _saved_tab             = profileData.get("last_tab", _TAB_RECOIL)
         self._activeTab        = _saved_tab if _saved_tab in _valid_tabs else _TAB_RECOIL
         self._panelCollapsed   = False
@@ -238,6 +318,26 @@ class PanelWindow(QWidget):
         the content frame QSS provides the panel background."""
         pass
 
+    def showEvent(self, event):
+        """Re-run the size/position fix once the window is actually visible.
+
+        Every code path that expands the panel (topbar tab click while
+        collapsed, arrow-key expand, the overlay hotkey) calls _selectTab()/
+        _reposition() *before* self.show() so the target tab is already
+        current when the window appears. But _reposition()'s invalidate()+
+        adjustSize() calls, when run on a still-hidden top-level widget, can
+        compute a stale/incorrect size — Qt only fully activates layouts and
+        polishes stylesheet-dependent widgets once they are actually shown,
+        so a hidden widget's sizeHint() can lag behind its true rendered
+        size (observed drift of tens of px, and in the worst case the
+        previous tab's much larger size sticking around entirely). That
+        computation is correct again immediately after show(), so redo it
+        here unconditionally on every showEvent — regardless of which call
+        path got us here — rather than relying on each call site to order
+        things correctly."""
+        super().showEvent(event)
+        self._reposition()
+
     def _buildLayout(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -245,13 +345,14 @@ class PanelWindow(QWidget):
 
         self._contentFrame = _RoundedFrame()
         self._contentFrame.setObjectName("panelContent")
-        self._contentFrame.setFixedWidth(PANEL_W)
+        self._contentFrame.setFixedWidth(PANEL_W)  # initial default; _reposition()
+        # sets the real per-tab width before the window is ever shown.
         root.addWidget(self._contentFrame)
 
         innerLayout = QVBoxLayout(self._contentFrame)
         innerLayout.setContentsMargins(0, 0, 0, 0)
         innerLayout.setSpacing(0)
-        self._stack = QStackedWidget()
+        self._stack = _ContentStack()
         innerLayout.addWidget(self._stack)
 
     # ------------------------------------------------------------------
@@ -263,10 +364,9 @@ class PanelWindow(QWidget):
             self._settingsCallback(s)
 
         self._recoilPanel    = RecoilPanel(None, self._settings, self._engine, onChanged)
-        self._crosshairPanel = CrosshairPanel(None, self._settings, self._engine, onChanged)
+        self._overlayPanel   = OverlayPanel(None, self._settings, self._engine, onChanged)
         self._remapperPanel  = RemapperPanel(None, self._settings, onChanged)
         self._macrosPanel    = MacrosPanel(None, self._settings, self._macroEngine, onChanged)
-        self._statsPanel     = StatsPanel(None, self._settings, onChanged)
         self._profilesPanel  = ProfilesPanel(
             None, self._profileData,
             onLoad=self._onProfileLoad,
@@ -279,10 +379,9 @@ class PanelWindow(QWidget):
 
         self._panels = {
             _TAB_RECOIL:    self._recoilPanel,
-            _TAB_CROSSHAIR: self._crosshairPanel,
+            _TAB_OVERLAY:   self._overlayPanel,
             _TAB_REMAPPER:  self._remapperPanel,
             _TAB_MACROS:    self._macrosPanel,
-            _TAB_STATS:     self._statsPanel,
             _TAB_PROFILES:  self._profilesPanel,
             _TAB_SETTINGS:  self._settingsPanel,
         }
@@ -344,11 +443,47 @@ class PanelWindow(QWidget):
     def _reposition(self):
         screen = QApplication.primaryScreen().geometry()
         y = TOPBAR_MARGIN_TOP + TOPBAR_H + TOPBAR_MARGIN_BOTTOM
-        if self._panels[self._activeTab].right_anchor:
-            self.move(screen.width() - TOPBAR_MARGIN_SIDE - PANEL_W, y)
+        activePanel = self._panels[self._activeTab]
+        # Per-tab content width (defaults to PANEL_W; a tab like Macros can
+        # opt into a wider/landscape layout via Panel.panel_width). Must be
+        # applied here — not just in _selectTab() — since _reposition() is
+        # also called directly from showEvent()/_onDisplayChange() without
+        # going through _selectTab() first.
+        panelW = getattr(activePanel, "panel_width", PANEL_W)
+        self._contentFrame.setFixedWidth(panelW)
+        if activePanel.right_anchor:
+            self.move(screen.width() - TOPBAR_MARGIN_SIDE - panelW, y)
         else:
             self.move(TOPBAR_MARGIN_SIDE, y)
-        self.adjustSize()
+        # Force the cached layout hints to recompute for the newly-current
+        # page before resizing, otherwise the window can keep the size the
+        # largest previously-shown tab required.
+        #
+        # A plain invalidate() on just the outer layouts isn't enough when a
+        # QStackedWidget is nested inside another layout (as _stack is here,
+        # and as MacrosPanel's own inner list/editor stack is one level
+        # further down): a parent layout, when asked for a stacked-widget
+        # child's contribution to its own sizeHint, goes through
+        # QWidgetItem::sizeHint() -> child.layout()->totalSizeHint(), which
+        # bypasses _ContentStack's Python-level sizeHint() override
+        # entirely and reads the QStackedLayout's own separately-cached
+        # totalSizeHint() instead. That cache is only refreshed by calling
+        # activate() on that *specific* layout — invalidate() alone just
+        # marks it dirty without recomputing it — and it has to happen
+        # bottom-up (innermost stacked layout first) since each level's
+        # activate() bakes in whatever its children currently report.
+        # Verified live: without this, shrinking a panel's content while
+        # its tab stays active and visible (e.g. macro editor: deleting
+        # action rows) leaves the window stuck at the largest size ever
+        # reached, even though sizeHint() computed via a fresh Python-level
+        # query looks correct throughout.
+        self._stack.layout().invalidate()
+        self._stack.layout().activate()
+        self._contentFrame.layout().invalidate()
+        self._contentFrame.layout().activate()
+        self.layout().invalidate()
+        self.layout().activate()
+        self.resize(self.sizeHint())
 
     # ------------------------------------------------------------------
     # Theme
@@ -439,7 +574,7 @@ class PanelWindow(QWidget):
         if settings is None:
             return
         old_theme = self._settings.get("theme", "Dark")
-        self._engine.updateSettings(settings)
+        self._engine.updateSettings(settings, full_reset=True)
         for key in settings:
             self._settings[key] = settings[key]
 
@@ -448,10 +583,9 @@ class PanelWindow(QWidget):
             self._applyTheme()
 
         self._recoilPanel.reload(self._settings)
-        self._crosshairPanel.reload(self._settings)
+        self._overlayPanel.reload(self._settings)
         self._remapperPanel.reload(self._settings)
         self._macrosPanel.reload(self._settings)
-        self._statsPanel.reload(self._settings)
         self._settingsPanel.reload(self._settings)
         self._profilesPanel.refreshCombo()
         self.flashBorder(theme.FLASH_LOAD)
@@ -471,15 +605,14 @@ class PanelWindow(QWidget):
             settings = prof.loadProfile(self._profileData, prof.DEFAULT_NAME)
             if settings:
                 old_theme = self._settings.get("theme", "Dark")
-                self._engine.updateSettings(settings)
+                self._engine.updateSettings(settings, full_reset=True)
                 for key in settings:
                     self._settings[key] = settings[key]
                 if self._settings.get("theme", "Dark") != old_theme:
                     theme.setTheme(self._settings["theme"])
                     self._applyTheme()
                 self._recoilPanel.reload(self._settings)
-                self._crosshairPanel.reload(self._settings)
+                self._overlayPanel.reload(self._settings)
                 self._remapperPanel.reload(self._settings)
                 self._macrosPanel.reload(self._settings)
-                self._statsPanel.reload(self._settings)
                 self._settingsPanel.reload(self._settings)

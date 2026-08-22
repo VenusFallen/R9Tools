@@ -34,6 +34,8 @@ assets/
 # Inno Setup script
 *.iss
 
-# LHM DLLs and runtime files (downloaded via auto-updater or manually)
-lib/*.dll
-lib/lhm_version.txt
+# LHM DLLs are bundled directly in lib/ and committed to the repo (MPL 2.0
+# compliant, unmodified binaries) — nothing under lib/ is ignored.
+
+# R9Tools runtime logs (only created here if the LOCALAPPDATA fallback triggers)
+logs/

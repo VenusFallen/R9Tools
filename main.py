@@ -8,6 +8,8 @@ import subprocess
 from PySide6.QtCore import qInstallMessageHandler, QtMsgType
 from PySide6.QtWidgets import QApplication
 
+from crash_logging import setup_logging
+
 # Interception kernel filter driver service names
 _INTERCEPTION_SERVICES = ["keyboard_filter", "mouse_filter"]
 
@@ -43,6 +45,7 @@ def _qt_message_filter(msg_type, _context, msg):
 
 
 def main():
+    setup_logging()
     _interception_driver(start=True)
     qInstallMessageHandler(_qt_message_filter)
     app = QApplication(sys.argv)
@@ -53,6 +56,10 @@ def main():
     cfg["crosshair"]["enabled"] = False
     cfg["remapper"]["enabled"]  = False
     cfg.setdefault("stats", {})["enabled"] = False
+    # running_indicator is intentionally left alone (not forced False) — it's
+    # a simple "R9Tools is loaded" badge, not a gameplay/visual module, and
+    # forcing it off on every launch would defeat its own purpose.
+    cfg.setdefault("running_indicator", {"enabled": True})
 
     engine       = RecoilEngine(cfg)
     macro_engine = MacroEngine(cfg)
