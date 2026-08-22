@@ -29,7 +29,6 @@ import ctypes.wintypes as wintypes
 import logging
 import threading
 import time
-import math
 
 import dx11_bridge as dx
 import dcomp_bridge as dcomp
@@ -706,6 +705,9 @@ class DX11Overlay:
 
     def _visible_lines(self, st: dict, data: dict) -> list:
         out = []
+        if st.get("show_fps") and "fps" in data:
+            out.append(("FPS", f"{data['fps']:.0f}"))
+
         if st.get("show_cpu_usage") and "cpu_usage" in data:
             val = f"{data['cpu_usage']:.0f}%"
             if st.get("show_cpu_temp") and "cpu_temp" in data:

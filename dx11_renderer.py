@@ -24,7 +24,6 @@ Usage:
     r.release()
 """
 import ctypes
-import ctypes.wintypes as wintypes
 from ctypes import (
     c_int, c_uint, c_float, c_void_p, c_char_p,
     POINTER, byref, Structure, c_ubyte, c_ulong, c_ushort, c_size_t,
@@ -174,8 +173,6 @@ _FMT_R8_UNORM           = 61
 
 # D3D11_INPUT_CLASSIFICATION
 _INPUT_PER_VERTEX = 0
-# Append-aligned
-_APPEND = 0xFFFFFFFF
 
 # D3D11_BIND
 _BIND_VERTEX_BUFFER    = 0x1
@@ -185,19 +182,15 @@ _BIND_SHADER_RESOURCE  = 0x8
 # D3D11_USAGE
 _USAGE_DEFAULT  = 0
 _USAGE_DYNAMIC  = 2
-_USAGE_STAGING  = 3
 
 # D3D11_CPU_ACCESS
 _CPU_WRITE = 0x10000
-_CPU_READ  = 0x20000
 
 # D3D11_MAP
 _MAP_WRITE_DISCARD = 4
 
 # D3D11_PRIMITIVE_TOPOLOGY
 _PRIM_TRIANGLELIST  = 4
-_PRIM_TRIANGLESTRIP = 5
-_PRIM_LINELIST      = 2
 
 # D3D11_BLEND / D3D11_BLEND_OP
 _BLEND_ONE           = 2

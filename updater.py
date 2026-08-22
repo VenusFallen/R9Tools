@@ -22,7 +22,6 @@ Uses only the stdlib (urllib, zipfile, json) — no extra dependencies.
 """
 import io
 import json
-import logging
 import subprocess
 import sys
 import tempfile
@@ -32,8 +31,6 @@ import urllib.request
 
 _APP_REPO = "VenusFallen/R9Tools"
 _API      = "https://api.github.com/repos/{repo}/releases/latest"
-
-_logger = logging.getLogger("r9tools.updater")
 
 
 # ---------------------------------------------------------------------------
