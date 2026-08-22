@@ -15,3 +15,4 @@ class UIBridge(QObject):
     strengthChanged = Signal(int)   # recoil strength value changed
     statsUpdated    = Signal(dict)  # new hardware stats from StatsPoller
     quitRequested   = Signal()      # quit hotkey pressed
+    updateAvailable = Signal(str)   # background auto-update check found a newer release (arg: latest version str)

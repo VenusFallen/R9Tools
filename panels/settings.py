@@ -23,6 +23,10 @@ class SettingsPanel(Panel):
     # Signals emitted from background threads to update the UI safely
     _sigAppStatus = Signal(str)
     _sigAppBtn    = Signal(str, bool)   # (button_label, enabled)
+    # Internal: lets a background thread (the auto-continue chain used by
+    # triggerAutoUpdate()) hand install+quit off to the Qt main thread
+    # safely, since QApplication.quit() must be called from the main thread.
+    _sigDoInstall = Signal()
 
     def __init__(self, parent, settings: dict, onSettingsChanged,
                  onCapture=None, onThemeChanged=None):
@@ -250,11 +254,28 @@ class SettingsPanel(Panel):
         alr.addWidget(appLink, 1)
         appCard.layout().addWidget(appLinkRow)
 
+        # Automatic check-on-launch toggle — a persistent app-behavior
+        # preference (not forced off on profile load, like running_indicator
+        # above), separate from this card's manual Check/Update/Install flow.
+        aucRow = QFrame(appCard)
+        aucl = QHBoxLayout(aucRow)
+        aucl.setContentsMargins(10, 0, 10, 6)
+        aucl.setSpacing(4)
+        aucLbl = QLabel("Automatically check for updates on launch", aucRow)
+        aucLbl.setStyleSheet(f"color: {theme.LABEL_FG};")
+        aucl.addWidget(aucLbl, 1)
+        auc = self._settings.setdefault("auto_update_check", {"enabled": True})
+        self._aucEnabledSwitch = theme.ToggleSwitch(
+            aucRow, value=auc.get("enabled", True), command=self._onAucToggle)
+        aucl.addWidget(self._aucEnabledSwitch)
+        appCard.layout().addWidget(aucRow)
+
         # Wire up background-thread → UI signals
         self._sigAppStatus.connect(self._appStatusLbl.setText)
         self._sigAppBtn.connect(
             lambda txt, en: (self._appActionBtn.setText(txt),
                              self._appActionBtn.setEnabled(en)))
+        self._sigDoInstall.connect(self._doInstallApp)
 
     # ------------------------------------------------------------------
     # Process list
@@ -306,6 +327,11 @@ class SettingsPanel(Panel):
         self._settings["running_indicator"] = ri
         self._riEnabledSwitch.set(ri.get("enabled", True))
 
+        # Auto-update-check-on-launch — also NOT forced off on profile switch.
+        auc = settings.setdefault("auto_update_check", {"enabled": True})
+        self._settings["auto_update_check"] = auc
+        self._aucEnabledSwitch.set(auc.get("enabled", True))
+
         # Hotkeys
         hk = settings.get("hotkeys", {})
         self._settings["hotkeys"].update(hk)
@@ -346,6 +372,11 @@ class SettingsPanel(Panel):
     def _onRiToggle(self):
         self._settings.setdefault("running_indicator", {})["enabled"] = \
             self._riEnabledSwitch.get()
+        self._onSettingsChanged(self._settings)
+
+    def _onAucToggle(self):
+        self._settings.setdefault("auto_update_check", {})["enabled"] = \
+            self._aucEnabledSwitch.get()
         self._onSettingsChanged(self._settings)
 
     def _onOverlayToggleChange(self, binding: dict):
@@ -404,7 +435,7 @@ class SettingsPanel(Panel):
             self._sigAppStatus.emit("Check failed")
             self._sigAppBtn.emit("Retry", True)
 
-    def _startDownloadApp(self):
+    def _startDownloadApp(self, auto_continue: bool = False):
         if not getattr(sys, "frozen", False):
             self._appState = "idle"
             self._sigAppStatus.emit("Dev build — skipped")
@@ -413,16 +444,26 @@ class SettingsPanel(Panel):
         self._appState = "downloading"
         self._sigAppStatus.emit("Downloading...")
         self._sigAppBtn.emit("...", False)
-        threading.Thread(target=self._doDownloadApp, daemon=True).start()
+        threading.Thread(target=self._doDownloadApp, args=(auto_continue,), daemon=True).start()
 
-    def _doDownloadApp(self):
+    def _doDownloadApp(self, auto_continue: bool = False):
         try:
             def prog(pct):
                 self._sigAppStatus.emit(f"Downloading... {pct}%")
             self._appInstallerPath = updater.download_app(prog)
             self._appState = "ready"
-            self._sigAppStatus.emit("Ready to install")
-            self._sigAppBtn.emit("Install", True)
+            if auto_continue:
+                # The automatic startup-check flow only offers a single
+                # "Update" action (no separate Install step), so chain
+                # straight through to install+quit once the download
+                # finishes. _doInstallApp() calls QApplication.quit(), which
+                # must happen on the Qt main thread — hand off via signal
+                # rather than calling it directly from this download thread.
+                self._sigAppStatus.emit("Installing...")
+                self._sigDoInstall.emit()
+            else:
+                self._sigAppStatus.emit("Ready to install")
+                self._sigAppBtn.emit("Install", True)
         except Exception:
             logging.exception("R9Tools update download/extract failed")
             self._appState = "error"
@@ -442,6 +483,33 @@ class SettingsPanel(Panel):
         # The installer is now running detached and independent of this
         # process; quit so it can replace the currently-locked exe.
         QApplication.instance().quit()
+
+    def triggerAutoUpdate(self, latest_version: str, on_status=None) -> None:
+        """
+        Programmatically start the download+install+quit flow for a version
+        already confirmed available by an out-of-band check — used by the
+        automatic startup update-check (see main.py's _onUpdateAvailable via
+        PanelWindow.triggerAutoUpdate). That flow's Update/Later prompt only
+        offers a single "Update" action, unlike this panel's own separate
+        Update-then-Install button steps, so this chains straight through to
+        install+quit once the download finishes instead of stopping at
+        "Ready to install".
+
+        Reuses the exact same updater.py-calling code this panel's own
+        Update/Install buttons use (_startDownloadApp -> _doDownloadApp ->
+        _doInstallApp) — nothing about the download/install/quit sequence
+        itself is duplicated here.
+
+        `on_status`, if given, is wired to the same status-text signal this
+        panel's own status label uses, so an external caller (e.g. a startup
+        progress dialog) can mirror progress without needing to know
+        anything about updater.py internals.
+        """
+        self._appLatestVer = latest_version
+        self._appState = "available"
+        if on_status is not None:
+            self._sigAppStatus.connect(on_status)
+        self._startDownloadApp(auto_continue=True)
 
 
 def _sep():

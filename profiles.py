@@ -133,6 +133,13 @@ _DEFAULT_SETTINGS = {
     "running_indicator": {
         "enabled": True,
     },
+    # Whether to check GitHub for a newer R9Tools release a few seconds
+    # after launch and prompt to update. A persistent app-behavior
+    # preference (like running_indicator above), not a per-session overlay
+    # feature — defaults on and is NOT forced off on profile load/startup.
+    "auto_update_check": {
+        "enabled": True,
+    },
     "macros": [],
     "stats": {
         "enabled":        False,
@@ -205,6 +212,11 @@ def _sanitize_profile(profile: dict) -> None:
     # module indicator above. No other fields to sanitize.
     ri = profile.get("running_indicator", {})
     ri["enabled"] = bool(ri.get("enabled", True))
+
+    # Auto-update check on launch — persistent app-behavior preference, not
+    # an overlay/session feature. No other fields to sanitize.
+    auc = profile.get("auto_update_check", {})
+    auc["enabled"] = bool(auc.get("enabled", True))
 
     # Hotkeys — each value must be {"code": 0-255, "e0": bool}
     hk = profile.get("hotkeys", {})
@@ -321,6 +333,12 @@ def load() -> dict:
         for key, val in _DEFAULT_SETTINGS["running_indicator"].items():
             profile["running_indicator"].setdefault(key, val)
 
+        # Migrate auto-update-check settings (new — backfill defaults for
+        # older profiles.json entries that predate this feature).
+        profile.setdefault("auto_update_check", copy.deepcopy(_DEFAULT_SETTINGS["auto_update_check"]))
+        for key, val in _DEFAULT_SETTINGS["auto_update_check"].items():
+            profile["auto_update_check"].setdefault(key, val)
+
         # Migrate hotkeys: promote old recoil.toggle_key int → hotkeys.recoil_toggle dict
         old_toggle = profile.get("recoil", {}).pop("toggle_key", None)
         profile.setdefault("hotkeys", copy.deepcopy(_DEFAULT_SETTINGS["hotkeys"]))
@@ -424,6 +442,9 @@ def loadProfile(data: dict, name: str) -> dict | None:
     # defeat its purpose (confirming R9Tools loaded). It just keeps
     # whatever the profile's saved setting was.
     settings.setdefault("running_indicator", copy.deepcopy(_DEFAULT_SETTINGS["running_indicator"]))
+    # auto_update_check is intentionally NOT forced off here either — same
+    # reasoning as running_indicator above.
+    settings.setdefault("auto_update_check", copy.deepcopy(_DEFAULT_SETTINGS["auto_update_check"]))
     settings.setdefault("rapidfire", copy.deepcopy(_DEFAULT_SETTINGS["rapidfire"]))
     settings["rapidfire"]["enabled"] = False
     settings.setdefault("macros", [])

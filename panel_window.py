@@ -549,6 +549,15 @@ class PanelWindow(QWidget):
         self._recoilPanel.updateStrength(value)
 
     # ------------------------------------------------------------------
+    # Auto-update (startup check) — forwards to the Settings panel, which
+    # owns the actual updater.py-calling logic. See main.py's
+    # _onUpdateAvailable for the caller.
+    # ------------------------------------------------------------------
+
+    def triggerAutoUpdate(self, latest_version: str, on_status=None) -> None:
+        self._settingsPanel.triggerAutoUpdate(latest_version, on_status=on_status)
+
+    # ------------------------------------------------------------------
     # Keyboard navigation
     # ------------------------------------------------------------------
 
