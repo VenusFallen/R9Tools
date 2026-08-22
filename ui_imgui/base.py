@@ -9,9 +9,11 @@ Capture helpers manage background-thread key capture with a threading.Event
 so the main render thread can poll for completion without blocking.
 """
 import threading
+import time
 import interception as _ic
 
 from recoil import MOUSE_BUTTON_FLAGS, _SCROLL_WHEEL_FLAG, scancodeLabel
+from interception_bringup import bringUpInterception
 
 _MOUSE_DISPLAY = {
     "mouse_left":   "LMB",
@@ -84,23 +86,62 @@ class CaptureHelper:
     Call start() to begin; poll is_done() each frame; call take() to retrieve result.
     """
 
+    # How long a "Capture failed" state should stay visible via
+    # failed_active()/should_retain() after a driver bring-up failure,
+    # before the panel is expected to drop this helper and go back to
+    # showing the normal (unbound/bound) label.
+    _FAILURE_DISPLAY_SECS = 1.8
+
     def __init__(self, keyboard_only: bool = True):
         self._keyboard_only = keyboard_only
         self._capturing     = False
         self._result: dict | None = None
         self._event         = threading.Event()
         self._thread: threading.Thread | None = None
+        self._on_suspend    = None
+        # Set when the capture thread couldn't stand up the interception
+        # driver context at all — distinct from is_done()/take() returning
+        # a falsy result, which callers otherwise treat as a silent no-op.
+        self._failed         = False
+        self._failed_at      = 0.0
 
     @property
     def capturing(self) -> bool:
         return self._capturing
+
+    @property
+    def failed(self) -> bool:
+        """True if the most recent capture attempt failed to bring up the
+        interception driver context (persists until the next start())."""
+        return self._failed
+
+    def failed_active(self) -> bool:
+        """True while a failure should still be shown to the user."""
+        return self._failed and (time.time() - self._failed_at) < self._FAILURE_DISPLAY_SECS
+
+    def should_retain(self) -> bool:
+        """True if the panel should keep holding onto this helper instead
+        of discarding it (still capturing, still displaying a failure, or a
+        completed result is sitting unconsumed via is_done()/take()).
+
+        Without the is_done() check, a helper whose capture just finished
+        successfully would be pruned by panels' per-frame cleanup before
+        the same draw() call ever reaches its is_done()/take() consumption
+        step — _run()'s finally block clears _capturing (and sets the done
+        event) together, so by the time should_retain() is False on
+        _capturing alone, the result is already sitting there unread. Once
+        take() runs it clears the done event, so a consumed (or never
+        started) helper still naturally stops being retained here."""
+        return self._capturing or self.failed_active() or self.is_done()
 
     def is_done(self) -> bool:
         """True if a capture completed since last take()."""
         return self._event.is_set()
 
     def take(self) -> dict | None:
-        """Retrieve result and clear done flag."""
+        """Retrieve result and clear done flag. Does not clear failed() —
+        that's cleared by the next start() — so panels can still show a
+        failure message for a bit via failed_active()/should_retain()."""
         self._event.clear()
         r = self._result
         self._result = None
@@ -111,6 +152,7 @@ class CaptureHelper:
             return
         self._capturing = True
         self._result    = None
+        self._failed    = False
         self._event.clear()
         if on_suspend:
             on_suspend(True)
@@ -119,12 +161,22 @@ class CaptureHelper:
         self._thread.start()
 
     def _run(self):
-        inter = _ic.Interception()
-        inter.set_filter(inter.is_keyboard, _ic.FilterKeyFlag.FILTER_KEY_ALL)
-        if not self._keyboard_only:
-            inter.set_filter(inter.is_mouse, _ic.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
-
         try:
+            def _configure(i):
+                i.set_filter(i.is_keyboard, _ic.FilterKeyFlag.FILTER_KEY_ALL)
+                if not self._keyboard_only:
+                    i.set_filter(i.is_mouse, _ic.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
+
+            inter = bringUpInterception(
+                _configure,
+                should_continue=lambda: self._capturing,
+                context="imgui-capture",
+            )
+            if inter is None:
+                self._failed    = True
+                self._failed_at = time.time()
+                return
+
             while self._capturing:
                 idx = inter.await_input(100)
                 if idx is None:

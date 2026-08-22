@@ -94,16 +94,22 @@ class RecoilUI(UIPanel):
 
         # Trigger key
         trig_label = _trigger_label(s.get("trigger_keys", ["mouse_left"]))
+        trig_colored = False
         if self._trig_cap.capturing:
             trig_label = "Press a key..."
             imgui.push_style_color(imgui.Col_.text, (0.133, 0.769, 0.369, 1.0))
+            trig_colored = True
+        elif self._trig_cap.failed_active():
+            trig_label = "Capture failed — try again"
+            imgui.push_style_color(imgui.Col_.text, (1.0, 0.4, 0.4, 1.0))
+            trig_colored = True
         imgui.text("Trigger:")
         imgui.same_line()
         if imgui.button(trig_label + "##rc_trig"):
-            if not self._trig_cap.capturing:
+            if not self._trig_cap.should_retain():
                 self._trig_cap = CaptureHelper(keyboard_only=False)
                 self._trig_cap.start()
-        if self._trig_cap.capturing:
+        if trig_colored:
             imgui.pop_style_color()
         if self._trig_cap.is_done():
             result = self._trig_cap.take()
@@ -144,9 +150,17 @@ class RecoilUI(UIPanel):
                 imgui.same_line(90)
 
                 cap = self._slot_caps.get(i)
-                btn_lbl = "Capturing..." if (cap and cap.capturing) else key_lbl
+                if cap and not cap.should_retain():
+                    self._slot_caps.pop(i, None)
+                    cap = None
+                if cap and cap.capturing:
+                    btn_lbl = "Capturing..."
+                elif cap and cap.failed_active():
+                    btn_lbl = "Capture failed"
+                else:
+                    btn_lbl = key_lbl
                 if imgui.button(btn_lbl + "##sk"):
-                    if not (cap and cap.capturing):
+                    if not (cap and cap.should_retain()):
                         c = CaptureHelper(keyboard_only=False)
                         c.start()
                         self._slot_caps[i] = c
@@ -155,7 +169,8 @@ class RecoilUI(UIPanel):
                     if result:
                         slots[i]["key"] = result
                         self._on_changed()
-                    self._slot_caps.pop(i, None)
+                    if not cap.should_retain():
+                        self._slot_caps.pop(i, None)
 
                 imgui.same_line()
                 imgui.set_next_item_width(80)
@@ -213,16 +228,22 @@ class RecoilUI(UIPanel):
 
         # RF Trigger
         rf_trig_lbl = _trigger_label(rf.get("trigger_keys", ["mouse_left"]))
+        rf_trig_colored = False
         if self._rf_cap.capturing:
             rf_trig_lbl = "Press a key..."
             imgui.push_style_color(imgui.Col_.text, (0.133, 0.769, 0.369, 1.0))
+            rf_trig_colored = True
+        elif self._rf_cap.failed_active():
+            rf_trig_lbl = "Capture failed — try again"
+            imgui.push_style_color(imgui.Col_.text, (1.0, 0.4, 0.4, 1.0))
+            rf_trig_colored = True
         imgui.text("Fire Trigger:")
         imgui.same_line()
         if imgui.button(rf_trig_lbl + "##rf_trig"):
-            if not self._rf_cap.capturing:
+            if not self._rf_cap.should_retain():
                 self._rf_cap = CaptureHelper(keyboard_only=False)
                 self._rf_cap.start()
-        if self._rf_cap.capturing:
+        if rf_trig_colored:
             imgui.pop_style_color()
         if self._rf_cap.is_done():
             result = self._rf_cap.take()

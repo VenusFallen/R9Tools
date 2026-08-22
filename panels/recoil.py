@@ -11,6 +11,7 @@ import theme
 import keybind_conflicts
 from panels.base import Panel
 from recoil import MOUSE_BUTTON_FLAGS, _SCROLL_WHEEL_FLAG, scancodeLabel
+from interception_bringup import bringUpInterception
 
 _POLL_MS = 100
 
@@ -88,6 +89,16 @@ class RecoilPanel(Panel):
         self._slotCapturing     = False   # slot key capture
         self._slotCaptureCallback = None
         self._slotCaptureResult   = None
+        # Set when a weapon/slot capture thread couldn't stand up the
+        # interception driver context at all (distinct from a legitimate
+        # "no keybind" result from pressing Esc) — checked by the capture
+        # -done handlers so a driver failure isn't misread as Esc.
+        self._slotCaptureFailed   = False
+        # Same distinction for the recoil-trigger and RF-trigger combo
+        # captures, which don't have an Esc-cancels-with-no-result path but
+        # still shouldn't silently keep the old binding on driver failure.
+        self._captureFailed       = False
+        self._rfTrigCaptureFailed = False
         # Prompt text/label for the capture currently in progress (weapon
         # or RF slot) — used to redraw the "still listening" prompt after
         # a rejection flash message if a re-armed capture is still running.
@@ -444,50 +455,69 @@ class RecoilPanel(Panel):
         threading.Thread(target=self._weaponCaptureThread, daemon=True).start()
 
     def _weaponCaptureThread(self):
-        inter = interception.Interception()
-        inter.set_filter(inter.is_keyboard, interception.FilterKeyFlag.FILTER_KEY_ALL)
-        inter.set_filter(inter.is_mouse, interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
         result = None
         escaped = False
+        failed = False
         try:
-            while result is None and not escaped:
-                idx = inter.await_input(100)
-                if idx is None or idx >= len(inter._devices):
-                    continue
-                device = inter._devices[idx]
-                stroke = device.receive()
-                if stroke is None:
-                    continue
+            inter = bringUpInterception(
+                lambda i: (
+                    i.set_filter(i.is_keyboard, interception.FilterKeyFlag.FILTER_KEY_ALL),
+                    i.set_filter(i.is_mouse, interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL),
+                ),
+                should_continue=lambda: self._slotCapturing,
+                context="weapon-capture",
+            )
+            if inter is None:
+                failed = True
+            else:
+                while result is None and not escaped:
+                    idx = inter.await_input(100)
+                    if idx is None or idx >= len(inter._devices):
+                        continue
+                    device = inter._devices[idx]
+                    stroke = device.receive()
+                    if stroke is None:
+                        continue
 
-                if isinstance(stroke, interception.KeyStroke):
-                    if stroke.flags & interception.KeyFlag.KEY_UP:
-                        if stroke.code == 1:   # ESC = add weapon with no keybind
-                            escaped = True
+                    if isinstance(stroke, interception.KeyStroke):
+                        if stroke.flags & interception.KeyFlag.KEY_UP:
+                            if stroke.code == 1:   # ESC = add weapon with no keybind
+                                escaped = True
+                            else:
+                                result = {
+                                    "code": stroke.code,
+                                    "e0":   bool(stroke.flags & interception.KeyFlag.KEY_E0),
+                                }
+                    elif isinstance(stroke, interception.MouseStroke):
+                        if stroke.button_flags & _SCROLL_WHEEL_FLAG:
+                            delta = stroke.button_data
+                            if delta > 32767:
+                                delta -= 65536
+                            result = {"type": "scroll", "direction": "up" if delta > 0 else "down"}
                         else:
-                            result = {
-                                "code": stroke.code,
-                                "e0":   bool(stroke.flags & interception.KeyFlag.KEY_E0),
-                            }
-                elif isinstance(stroke, interception.MouseStroke):
-                    if stroke.button_flags & _SCROLL_WHEEL_FLAG:
-                        delta = stroke.button_data
-                        if delta > 32767:
-                            delta -= 65536
-                        result = {"type": "scroll", "direction": "up" if delta > 0 else "down"}
-                    else:
-                        for name, (down_flag, up_flag) in MOUSE_BUTTON_FLAGS.items():
-                            if stroke.button_flags & up_flag:
-                                result = {"type": "mouse", "button": name}
-                                break
+                            for name, (down_flag, up_flag) in MOUSE_BUTTON_FLAGS.items():
+                                if stroke.button_flags & up_flag:
+                                    result = {"type": "mouse", "button": name}
+                                    break
         finally:
             self._slotCapturing = False
             self._engine.setSuspendHotkeys(False)
 
+        self._slotCaptureFailed = failed
         self._slotCaptureResult = result  # None on Esc = no keybind weapon
         self._slotCaptureDone.emit()
 
     @Slot()
     def _onWeaponCaptureDone(self):
+        if self._slotCaptureFailed:
+            self._slotCaptureFailed = False
+            self._slotCaptureCallback = None
+            self._slotCaptureResult   = None
+            self._weaponCaptureLabel.setText("Capture failed — try again")
+            self._weaponCaptureLabel.setStyleSheet(_captureLabelStyleError())
+            self._weaponCaptureLabel.setVisible(True)
+            QTimer.singleShot(1800, lambda: self._weaponCaptureLabel.setVisible(False))
+            return
         self._weaponCaptureLabel.setVisible(False)
         cb     = self._slotCaptureCallback
         result = self._slotCaptureResult
@@ -631,41 +661,51 @@ class RecoilPanel(Panel):
         threading.Thread(target=self._slotCaptureThread, daemon=True).start()
 
     def _slotCaptureThread(self):
-        inter = interception.Interception()
-        inter.set_filter(inter.is_keyboard, interception.FilterKeyFlag.FILTER_KEY_ALL)
-        inter.set_filter(inter.is_mouse, interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
         result = None
+        failed = False
         try:
-            while result is None:
-                idx = inter.await_input(100)
-                if idx is None or idx >= len(inter._devices):
-                    continue
-                device = inter._devices[idx]
-                stroke = device.receive()
-                if stroke is None:
-                    continue
+            inter = bringUpInterception(
+                lambda i: (
+                    i.set_filter(i.is_keyboard, interception.FilterKeyFlag.FILTER_KEY_ALL),
+                    i.set_filter(i.is_mouse, interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL),
+                ),
+                should_continue=lambda: self._slotCapturing,
+                context="slot-capture",
+            )
+            if inter is None:
+                failed = True
+            else:
+                while result is None:
+                    idx = inter.await_input(100)
+                    if idx is None or idx >= len(inter._devices):
+                        continue
+                    device = inter._devices[idx]
+                    stroke = device.receive()
+                    if stroke is None:
+                        continue
 
-                if isinstance(stroke, interception.KeyStroke):
-                    if stroke.flags & interception.KeyFlag.KEY_UP:
-                        result = {
-                            "code": stroke.code,
-                            "e0":   bool(stroke.flags & interception.KeyFlag.KEY_E0),
-                        }
-                elif isinstance(stroke, interception.MouseStroke):
-                    if stroke.button_flags & _SCROLL_WHEEL_FLAG:
-                        delta = stroke.button_data
-                        if delta > 32767:
-                            delta -= 65536
-                        result = {"type": "scroll", "direction": "up" if delta > 0 else "down"}
-                    else:
-                        for name, (down_flag, up_flag) in MOUSE_BUTTON_FLAGS.items():
-                            if stroke.button_flags & up_flag:
-                                result = {"type": "mouse", "button": name}
-                                break
+                    if isinstance(stroke, interception.KeyStroke):
+                        if stroke.flags & interception.KeyFlag.KEY_UP:
+                            result = {
+                                "code": stroke.code,
+                                "e0":   bool(stroke.flags & interception.KeyFlag.KEY_E0),
+                            }
+                    elif isinstance(stroke, interception.MouseStroke):
+                        if stroke.button_flags & _SCROLL_WHEEL_FLAG:
+                            delta = stroke.button_data
+                            if delta > 32767:
+                                delta -= 65536
+                            result = {"type": "scroll", "direction": "up" if delta > 0 else "down"}
+                        else:
+                            for name, (down_flag, up_flag) in MOUSE_BUTTON_FLAGS.items():
+                                if stroke.button_flags & up_flag:
+                                    result = {"type": "mouse", "button": name}
+                                    break
         finally:
             self._slotCapturing = False
             self._engine.setSuspendHotkeys(False)
 
+        self._slotCaptureFailed = failed
         self._slotCaptureResult = result
         self._slotCaptureDone.emit()
 
@@ -674,6 +714,15 @@ class RecoilPanel(Panel):
         if self._weaponCapture:
             self._weaponCapture = False
             self._onWeaponCaptureDone()
+            return
+        if self._slotCaptureFailed:
+            self._slotCaptureFailed = False
+            self._slotCaptureCallback = None
+            self._slotCaptureResult   = None
+            self._slotCaptureLabel.setText("Capture failed — try again")
+            self._slotCaptureLabel.setStyleSheet(_captureLabelStyleError())
+            self._slotCaptureLabel.setVisible(True)
+            QTimer.singleShot(1800, lambda: self._slotCaptureLabel.setVisible(False))
             return
         self._slotCaptureLabel.setVisible(False)
         cb     = self._slotCaptureCallback
@@ -839,50 +888,60 @@ class RecoilPanel(Panel):
         threading.Thread(target=self._captureThread, daemon=True).start()
 
     def _captureThread(self):
-        inter = interception.Interception()
-        inter.set_filter(inter.is_mouse,
-                         interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
-        inter.set_filter(inter.is_keyboard,
-                         interception.FilterKeyFlag.FILTER_KEY_DOWN
-                         | interception.FilterKeyFlag.FILTER_KEY_UP)
         held: set  = set()
         seen: list = []
+        failed = False
         try:
-            while self._capturing:
-                idx = inter.await_input(100)
-                if idx is None or idx >= len(inter._devices):
-                    continue
-                device = inter._devices[idx]
-                stroke = device.receive()
-                if stroke is None:
-                    continue
-                if isinstance(stroke, interception.MouseStroke):
-                    for key, (downFlag, upFlag) in MOUSE_BUTTON_FLAGS.items():
-                        if stroke.button_flags & downFlag:
-                            held.add(key)
-                            if key not in seen:
-                                seen.append(key)
+            inter = bringUpInterception(
+                lambda i: (
+                    i.set_filter(i.is_mouse,
+                                 interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL),
+                    i.set_filter(i.is_keyboard,
+                                 interception.FilterKeyFlag.FILTER_KEY_DOWN
+                                 | interception.FilterKeyFlag.FILTER_KEY_UP),
+                ),
+                should_continue=lambda: self._capturing,
+                context="recoil-trigger-capture",
+            )
+            if inter is None:
+                failed = True
+            else:
+                while self._capturing:
+                    idx = inter.await_input(100)
+                    if idx is None or idx >= len(inter._devices):
+                        continue
+                    device = inter._devices[idx]
+                    stroke = device.receive()
+                    if stroke is None:
+                        continue
+                    if isinstance(stroke, interception.MouseStroke):
+                        for key, (downFlag, upFlag) in MOUSE_BUTTON_FLAGS.items():
+                            if stroke.button_flags & downFlag:
+                                held.add(key)
+                                if key not in seen:
+                                    seen.append(key)
+                                    self._liveUpdate.emit(theme.comboLabel(seen) + " ...")
+                            elif stroke.button_flags & upFlag:
+                                held.discard(key)
+
+                    elif isinstance(stroke, interception.KeyStroke):
+                        isE0 = bool(stroke.flags & interception.KeyFlag.KEY_E0)
+                        name = scancodeLabel(stroke.code, isE0)
+                        if not (stroke.flags & interception.KeyFlag.KEY_UP):
+                            held.add(name)
+                            if name not in seen:
+                                seen.append(name)
                                 self._liveUpdate.emit(theme.comboLabel(seen) + " ...")
-                        elif stroke.button_flags & upFlag:
-                            held.discard(key)
+                        else:
+                            held.discard(name)
 
-                elif isinstance(stroke, interception.KeyStroke):
-                    isE0 = bool(stroke.flags & interception.KeyFlag.KEY_E0)
-                    name = scancodeLabel(stroke.code, isE0)
-                    if not (stroke.flags & interception.KeyFlag.KEY_UP):
-                        held.add(name)
-                        if name not in seen:
-                            seen.append(name)
-                            self._liveUpdate.emit(theme.comboLabel(seen) + " ...")
-                    else:
-                        held.discard(name)
-
-                if seen and not held:
-                    break
+                    if seen and not held:
+                        break
         finally:
             self._capturing = False
             self._engine.setSuspendHotkeys(False)
 
+        self._captureFailed = failed
         # Note: settings["recoil"]["trigger_keys"] is deliberately NOT
         # written here — the conflict check in _finishCapture() (main
         # thread) must run against the *old* value first, and only commit
@@ -896,6 +955,14 @@ class RecoilPanel(Panel):
 
     @Slot(list)
     def _finishCapture(self, combo: list):
+        if self._captureFailed:
+            self._captureFailed = False
+            current = self._settings["recoil"]["trigger_keys"]
+            self._keybindBtn.setText("Capture failed — try again")
+            self._keybindBtn.setStyleSheet("color: #ff6666;")
+            QTimer.singleShot(1800, lambda: self._revertTriggerBtn(
+                self._keybindBtn, current, lambda: self._capturing))
+            return
         conflict = keybind_conflicts.findConflict(
             self._settings, combo, exclude_id="recoil_trigger")
         if conflict:
@@ -941,51 +1008,61 @@ class RecoilPanel(Panel):
         threading.Thread(target=self._rfTrigCaptureThread, daemon=True).start()
 
     def _rfTrigCaptureThread(self):
-        inter = interception.Interception()
-        inter.set_filter(inter.is_mouse,
-                         interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
-        inter.set_filter(inter.is_keyboard,
-                         interception.FilterKeyFlag.FILTER_KEY_DOWN
-                         | interception.FilterKeyFlag.FILTER_KEY_UP)
         held: set  = set()
         seen: list = []
+        failed = False
         try:
-            while self._rfTrigCapturing:
-                idx = inter.await_input(100)
-                if idx is None or idx >= len(inter._devices):
-                    continue
-                device = inter._devices[idx]
-                stroke = device.receive()
-                if stroke is None:
-                    continue
+            inter = bringUpInterception(
+                lambda i: (
+                    i.set_filter(i.is_mouse,
+                                 interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL),
+                    i.set_filter(i.is_keyboard,
+                                 interception.FilterKeyFlag.FILTER_KEY_DOWN
+                                 | interception.FilterKeyFlag.FILTER_KEY_UP),
+                ),
+                should_continue=lambda: self._rfTrigCapturing,
+                context="rf-trigger-capture",
+            )
+            if inter is None:
+                failed = True
+            else:
+                while self._rfTrigCapturing:
+                    idx = inter.await_input(100)
+                    if idx is None or idx >= len(inter._devices):
+                        continue
+                    device = inter._devices[idx]
+                    stroke = device.receive()
+                    if stroke is None:
+                        continue
 
-                if isinstance(stroke, interception.MouseStroke):
-                    for key, (downFlag, upFlag) in MOUSE_BUTTON_FLAGS.items():
-                        if stroke.button_flags & downFlag:
-                            held.add(key)
-                            if key not in seen:
-                                seen.append(key)
+                    if isinstance(stroke, interception.MouseStroke):
+                        for key, (downFlag, upFlag) in MOUSE_BUTTON_FLAGS.items():
+                            if stroke.button_flags & downFlag:
+                                held.add(key)
+                                if key not in seen:
+                                    seen.append(key)
+                                    self._rfTrigLiveUpdate.emit(theme.comboLabel(seen) + " ...")
+                            elif stroke.button_flags & upFlag:
+                                held.discard(key)
+
+                    elif isinstance(stroke, interception.KeyStroke):
+                        isE0 = bool(stroke.flags & interception.KeyFlag.KEY_E0)
+                        name = scancodeLabel(stroke.code, isE0)
+                        if not (stroke.flags & interception.KeyFlag.KEY_UP):
+                            held.add(name)
+                            if name not in seen:
+                                seen.append(name)
                                 self._rfTrigLiveUpdate.emit(theme.comboLabel(seen) + " ...")
-                        elif stroke.button_flags & upFlag:
-                            held.discard(key)
+                        else:
+                            held.discard(name)
 
-                elif isinstance(stroke, interception.KeyStroke):
-                    isE0 = bool(stroke.flags & interception.KeyFlag.KEY_E0)
-                    name = scancodeLabel(stroke.code, isE0)
-                    if not (stroke.flags & interception.KeyFlag.KEY_UP):
-                        held.add(name)
-                        if name not in seen:
-                            seen.append(name)
-                            self._rfTrigLiveUpdate.emit(theme.comboLabel(seen) + " ...")
-                    else:
-                        held.discard(name)
-
-                if seen and not held:
-                    break
+                    if seen and not held:
+                        break
         finally:
             self._rfTrigCapturing = False
             self._engine.setSuspendHotkeys(False)
 
+        self._rfTrigCaptureFailed = failed
         # Settings are written in _finishRfTrigCapture() (main thread) only
         # after the conflict check passes — see _captureThread's comment.
         combo = seen if seen else self._settings.get("rapidfire", {}).get("trigger_keys", ["mouse_left"])
@@ -997,6 +1074,14 @@ class RecoilPanel(Panel):
 
     @Slot(list)
     def _finishRfTrigCapture(self, combo: list):
+        if self._rfTrigCaptureFailed:
+            self._rfTrigCaptureFailed = False
+            current = self._settings.get("rapidfire", {}).get("trigger_keys", ["mouse_left"])
+            self._rfTrigBtn.setText("Capture failed — try again")
+            self._rfTrigBtn.setStyleSheet("color: #ff6666;")
+            QTimer.singleShot(1800, lambda: self._revertTriggerBtn(
+                self._rfTrigBtn, current, lambda: self._rfTrigCapturing))
+            return
         conflict = keybind_conflicts.findConflict(
             self._settings, combo, exclude_id="rf_trigger")
         if conflict:

@@ -148,10 +148,19 @@ class SettingsUI(UIPanel):
                     keyboard_only: bool = True):
         binding = hk.get(hk_key, {"code": 0, "e0": False})
         cap     = self._captures.get(hk_key)
+        if cap and not cap.should_retain():
+            self._captures.pop(hk_key, None)
+            cap = None
 
+        colored = False
         if cap and cap.capturing:
             btn_text = "Press a key..."
             imgui.push_style_color(imgui.Col_.text, (0.133, 0.769, 0.369, 1.0))
+            colored = True
+        elif cap and cap.failed_active():
+            btn_text = "Capture failed — try again"
+            imgui.push_style_color(imgui.Col_.text, (1.0, 0.4, 0.4, 1.0))
+            colored = True
         else:
             btn_text = binding_label(binding)
 
@@ -159,12 +168,12 @@ class SettingsUI(UIPanel):
         imgui.same_line(imgui.get_content_region_avail().x - 100 +
                         imgui.get_cursor_pos_x())
         if imgui.button(btn_text + f"##{hk_key}"):
-            if not (cap and cap.capturing):
+            if not (cap and cap.should_retain()):
                 c = CaptureHelper(keyboard_only=keyboard_only)
                 c.start(on_suspend=self._on_suspend)
                 self._captures[hk_key] = c
 
-        if cap and cap.capturing:
+        if colored:
             imgui.pop_style_color()
 
         if cap and cap.is_done():
@@ -172,7 +181,8 @@ class SettingsUI(UIPanel):
             if result:
                 hk[hk_key] = result
                 self._on_changed()
-            self._captures.pop(hk_key, None)
+            if not cap.should_retain():
+                self._captures.pop(hk_key, None)
 
     # ------------------------------------------------------------------
     # Updater

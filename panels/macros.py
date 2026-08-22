@@ -14,6 +14,7 @@ import keybind_conflicts
 from panels.base import Panel
 from recoil import MOUSE_BUTTON_FLAGS, scancodeLabel
 from macro_engine import MacroEngine, actionLabel
+from interception_bringup import bringUpInterception
 
 _MOUSE_DISPLAY = {
     "mouse_left":   "LMB",
@@ -83,6 +84,7 @@ class MacrosPanel(Panel):
         self._capturing         = False
         self._captureCallback   = None
         self._captureResult     = None
+        self._captureFailed     = False
         self._recording         = False
 
         self._captureDone.connect(self._onCaptureDone)
@@ -643,38 +645,49 @@ class MacrosPanel(Panel):
             daemon=True).start()
 
     def _captureThread(self, keyboard_only: bool, mouse_only: bool):
-        inter = interception.Interception()
-        inter.set_filter(inter.is_keyboard, interception.FilterKeyFlag.FILTER_KEY_ALL)
-        if not keyboard_only:
-            inter.set_filter(inter.is_mouse, interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
         result = None
+        failed = False
         try:
-            while result is None:
-                idx = inter.await_input(100)
-                if idx is None:
-                    continue
-                if idx >= len(inter._devices):
-                    continue
-                device = inter._devices[idx]
-                stroke = device.receive()
-                if stroke is None:
-                    continue
-                if not mouse_only and isinstance(stroke, interception.KeyStroke):
-                    if stroke.flags & interception.KeyFlag.KEY_UP:
-                        result = {
-                            "type": "key",
-                            "code": stroke.code,
-                            "e0":   bool(stroke.flags & interception.KeyFlag.KEY_E0),
-                        }
-                elif not keyboard_only and isinstance(stroke, interception.MouseStroke):
-                    for name, (dFlag, uFlag) in MOUSE_BUTTON_FLAGS.items():
-                        if stroke.button_flags & uFlag:
-                            result = {"type": "mouse", "button": name}
-                            break
+            def _configure(i):
+                i.set_filter(i.is_keyboard, interception.FilterKeyFlag.FILTER_KEY_ALL)
+                if not keyboard_only:
+                    i.set_filter(i.is_mouse, interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
+
+            inter = bringUpInterception(
+                _configure,
+                should_continue=lambda: self._capturing,
+                context="macro-capture",
+            )
+            if inter is None:
+                failed = True
+            else:
+                while result is None:
+                    idx = inter.await_input(100)
+                    if idx is None:
+                        continue
+                    if idx >= len(inter._devices):
+                        continue
+                    device = inter._devices[idx]
+                    stroke = device.receive()
+                    if stroke is None:
+                        continue
+                    if not mouse_only and isinstance(stroke, interception.KeyStroke):
+                        if stroke.flags & interception.KeyFlag.KEY_UP:
+                            result = {
+                                "type": "key",
+                                "code": stroke.code,
+                                "e0":   bool(stroke.flags & interception.KeyFlag.KEY_E0),
+                            }
+                    elif not keyboard_only and isinstance(stroke, interception.MouseStroke):
+                        for name, (dFlag, uFlag) in MOUSE_BUTTON_FLAGS.items():
+                            if stroke.button_flags & uFlag:
+                                result = {"type": "mouse", "button": name}
+                                break
         finally:
             self._capturing = False
 
-        self._captureResult = result
+        self._captureFailed = failed
+        self._captureResult = result  # None: user's callbacks already treat this as a no-op
         self._captureDone.emit()
 
     @Slot()
@@ -682,8 +695,18 @@ class MacrosPanel(Panel):
         self._statusLabel.setVisible(False)
         cb     = self._captureCallback
         result = self._captureResult
+        failed = self._captureFailed
         self._captureCallback = None
         self._captureResult   = None
+        self._captureFailed   = False
+        if failed:
+            self._statusLabel.setText("Capture failed — try again")
+            self._statusLabel.setStyleSheet(
+                f"color: #ff6666; font: italic 9pt 'Segoe UI';"
+                f" padding: 0px 10px 2px 10px;")
+            self._statusLabel.setVisible(True)
+            QTimer.singleShot(1800, self._resetStatusLabel)
+            return
         if cb:
             cb(result)
 

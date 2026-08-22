@@ -406,6 +406,11 @@ class KeybindButton(QWidget):
         self._keyboard_only   = keyboard_only
         self._capturing       = False
         self._captureSuccess  = False
+        # Set if the capture thread couldn't stand up the interception
+        # driver context at all — distinct from a normal cancel/no-result,
+        # so _finish() can show a real failure message instead of just
+        # silently reverting to the previous binding.
+        self._captureFailed   = False
         # Conflict-check wiring — settings is the full app settings dict and
         # exclude_id is this field's own registry id (see
         # keybind_conflicts.iterBindingSources), so re-capturing the same
@@ -468,53 +473,62 @@ class KeybindButton(QWidget):
     def _captureThread(self):
         import interception as _ic
         from recoil import MOUSE_BUTTON_FLAGS, _SCROLL_WHEEL_FLAG
-        inter = _ic.Interception()
-        inter.set_filter(inter.is_keyboard, _ic.FilterKeyFlag.FILTER_KEY_ALL)
-        if not self._keyboard_only:
-            inter.set_filter(
-                inter.is_mouse, _ic.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
+        from interception_bringup import bringUpInterception
 
         try:
-            while self._capturing:
-                idx = inter.await_input(100)
-                if idx is None:
-                    continue
-                if idx >= len(inter._devices):
-                    continue
-                device = inter._devices[idx]
-                stroke = device.receive()
-                if stroke is None:
-                    continue
-                device.send(stroke)   # pass through to OS
+            def _configure(i):
+                i.set_filter(i.is_keyboard, _ic.FilterKeyFlag.FILTER_KEY_ALL)
+                if not self._keyboard_only:
+                    i.set_filter(i.is_mouse, _ic.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
 
-                if isinstance(stroke, _ic.KeyStroke):
-                    if stroke.flags & _ic.KeyFlag.KEY_UP:
-                        self._binding = {
-                            "code": stroke.code,
-                            "e0":   bool(stroke.flags & _ic.KeyFlag.KEY_E0),
-                        }
-                        self._captureSuccess = True
-                        break
-                elif not self._keyboard_only and isinstance(stroke, _ic.MouseStroke):
-                    # Scroll wheel
-                    if stroke.button_flags & _SCROLL_WHEEL_FLAG:
-                        delta = stroke.button_data
-                        if delta > 32767:
-                            delta -= 65536
-                        self._binding = {
-                            "type":      "scroll",
-                            "direction": "up" if delta > 0 else "down",
-                        }
-                        self._captureSuccess = True
-                        break
-                    # Mouse buttons (on release)
-                    for name, (down_flag, up_flag) in MOUSE_BUTTON_FLAGS.items():
-                        if stroke.button_flags & up_flag:
-                            self._binding = {"type": "mouse", "button": name}
+            inter = bringUpInterception(
+                _configure,
+                should_continue=lambda: self._capturing,
+                context="keybind-button-capture",
+            )
+            if inter is None:
+                self._captureFailed = True
+            else:
+                while self._capturing:
+                    idx = inter.await_input(100)
+                    if idx is None:
+                        continue
+                    if idx >= len(inter._devices):
+                        continue
+                    device = inter._devices[idx]
+                    stroke = device.receive()
+                    if stroke is None:
+                        continue
+                    device.send(stroke)   # pass through to OS
+
+                    if isinstance(stroke, _ic.KeyStroke):
+                        if stroke.flags & _ic.KeyFlag.KEY_UP:
+                            self._binding = {
+                                "code": stroke.code,
+                                "e0":   bool(stroke.flags & _ic.KeyFlag.KEY_E0),
+                            }
                             self._captureSuccess = True
                             break
-                    if self._captureSuccess:
-                        break
+                    elif not self._keyboard_only and isinstance(stroke, _ic.MouseStroke):
+                        # Scroll wheel
+                        if stroke.button_flags & _SCROLL_WHEEL_FLAG:
+                            delta = stroke.button_data
+                            if delta > 32767:
+                                delta -= 65536
+                            self._binding = {
+                                "type":      "scroll",
+                                "direction": "up" if delta > 0 else "down",
+                            }
+                            self._captureSuccess = True
+                            break
+                        # Mouse buttons (on release)
+                        for name, (down_flag, up_flag) in MOUSE_BUTTON_FLAGS.items():
+                            if stroke.button_flags & up_flag:
+                                self._binding = {"type": "mouse", "button": name}
+                                self._captureSuccess = True
+                                break
+                        if self._captureSuccess:
+                            break
         finally:
             self._capturing = False
             if self._onCapture:
@@ -523,6 +537,12 @@ class KeybindButton(QWidget):
 
     @Slot()
     def _finish(self):
+        if self._captureFailed:
+            self._captureFailed = False
+            self._btn.setText("Capture failed — try again")
+            self._btn.setStyleSheet("color: #ff6666;")
+            QTimer.singleShot(1800, self._revertFailedLabel)
+            return
         if self._captureSuccess and self._settings is not None:
             from keybind_conflicts import findConflict
             conflict = findConflict(self._settings, self._binding, self._exclude_id)
@@ -545,6 +565,10 @@ class KeybindButton(QWidget):
         self._btn.setStyleSheet("")
         if self._captureSuccess:
             self._onChange(self._binding)
+
+    def _revertFailedLabel(self):
+        self._btn.setText(self._bindingLabel())
+        self._btn.setStyleSheet("")
 
     def _revertConflictMessage(self):
         # If the re-armed capture (started right after the conflict) is

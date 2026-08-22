@@ -10,6 +10,7 @@ import theme
 import keybind_conflicts
 from panels.base import Panel
 from recoil import MOUSE_BUTTON_FLAGS, _SCROLL_WHEEL_FLAG, scancodeLabel
+from interception_bringup import bringUpInterception
 
 _FROM_PROMPT = "FROM: Press any key or button..."
 
@@ -47,6 +48,7 @@ class RemapperPanel(Panel):
         self._pendingFrom       = None
         self._pendingCallback   = None
         self._pendingResult     = None
+        self._pendingFailed     = False
         # Prompt for the capture currently in progress — used to redraw
         # the "still listening" prompt after a rejection flash message if
         # a re-armed capture is still running.
@@ -320,50 +322,60 @@ class RemapperPanel(Panel):
                          args=(allow_scroll,), daemon=True).start()
 
     def _captureThread(self, allow_scroll: bool):
-        inter = interception.Interception()
-        inter.set_filter(inter.is_keyboard,
-                         interception.FilterKeyFlag.FILTER_KEY_ALL)
-        inter.set_filter(inter.is_mouse,
-                         interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL)
         result = None
+        failed = False
         try:
-            while result is None:
-                idx = inter.await_input(100)
-                if idx is None:
-                    continue
-                if idx >= len(inter._devices):
-                    continue
-                device = inter._devices[idx]
-                stroke = device.receive()
-                if stroke is None:
-                    continue
+            inter = bringUpInterception(
+                lambda i: (
+                    i.set_filter(i.is_keyboard,
+                                 interception.FilterKeyFlag.FILTER_KEY_ALL),
+                    i.set_filter(i.is_mouse,
+                                 interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL),
+                ),
+                should_continue=lambda: self._capturing,
+                context="remapper-capture",
+            )
+            if inter is None:
+                failed = True
+            else:
+                while result is None:
+                    idx = inter.await_input(100)
+                    if idx is None:
+                        continue
+                    if idx >= len(inter._devices):
+                        continue
+                    device = inter._devices[idx]
+                    stroke = device.receive()
+                    if stroke is None:
+                        continue
 
-                if isinstance(stroke, interception.KeyStroke):
-                    if stroke.flags & interception.KeyFlag.KEY_UP:
-                        result = {
-                            "type": "key",
-                            "code": stroke.code,
-                            "e0":   bool(stroke.flags & interception.KeyFlag.KEY_E0),
-                        }
+                    if isinstance(stroke, interception.KeyStroke):
+                        if stroke.flags & interception.KeyFlag.KEY_UP:
+                            result = {
+                                "type": "key",
+                                "code": stroke.code,
+                                "e0":   bool(stroke.flags & interception.KeyFlag.KEY_E0),
+                            }
 
-                elif isinstance(stroke, interception.MouseStroke):
-                    if allow_scroll and stroke.button_flags & _SCROLL_WHEEL_FLAG:
-                        delta = stroke.button_data
-                        if delta > 32767:
-                            delta -= 65536
-                        result = {
-                            "type":      "scroll",
-                            "direction": "up" if delta > 0 else "down",
-                        }
-                    else:
-                        for name, (downFlag, upFlag) in MOUSE_BUTTON_FLAGS.items():
-                            if stroke.button_flags & upFlag:
-                                result = {"type": "mouse", "button": name}
-                                break
+                    elif isinstance(stroke, interception.MouseStroke):
+                        if allow_scroll and stroke.button_flags & _SCROLL_WHEEL_FLAG:
+                            delta = stroke.button_data
+                            if delta > 32767:
+                                delta -= 65536
+                            result = {
+                                "type":      "scroll",
+                                "direction": "up" if delta > 0 else "down",
+                            }
+                        else:
+                            for name, (downFlag, upFlag) in MOUSE_BUTTON_FLAGS.items():
+                                if stroke.button_flags & upFlag:
+                                    result = {"type": "mouse", "button": name}
+                                    break
         finally:
             self._capturing = False
 
-        self._pendingResult = result
+        self._pendingFailed = failed
+        self._pendingResult = result  # None: callers already treat this as a no-op
         self._captureDone.emit()
 
     @Slot()
@@ -371,8 +383,17 @@ class RemapperPanel(Panel):
         self._captureLabel.setVisible(False)
         cb     = self._pendingCallback
         result = self._pendingResult
+        failed = self._pendingFailed
         self._pendingCallback = None
         self._pendingResult   = None
+        self._pendingFailed   = False
+        if failed:
+            self._captureLabel.setText("Capture failed — try again")
+            self._captureLabel.setStyleSheet("color: #ff6666; font: italic 9pt 'Segoe UI';"
+                                              " padding: 0px 10px 4px 10px;")
+            self._captureLabel.setVisible(True)
+            QTimer.singleShot(1800, lambda: self._captureLabel.setVisible(False))
+            return
         if cb:
             cb(result)
 

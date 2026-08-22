@@ -145,26 +145,36 @@ class MacrosUI(UIPanel):
         # Trigger
         trig = m.setdefault("trigger", {"type": "key", "code": 0, "e0": False})
         cap  = self._trig_caps.get(idx)
+        if cap and not cap.should_retain():
+            self._trig_caps.pop(idx, None)
+            cap = None
+        colored = False
         if cap and cap.capturing:
             btn_lbl = "Press a key..."
             imgui.push_style_color(imgui.Col_.text, (0.133, 0.769, 0.369, 1.0))
+            colored = True
+        elif cap and cap.failed_active():
+            btn_lbl = "Capture failed — try again"
+            imgui.push_style_color(imgui.Col_.text, (1.0, 0.4, 0.4, 1.0))
+            colored = True
         else:
             btn_lbl = _trigger_label(trig)
         imgui.text("Trigger:")
         imgui.same_line()
         if imgui.button(btn_lbl + "##mc_trig"):
-            if not (cap and cap.capturing):
+            if not (cap and cap.should_retain()):
                 c = CaptureHelper(keyboard_only=False)
                 c.start()
                 self._trig_caps[idx] = c
-        if cap and cap.capturing:
+        if colored:
             imgui.pop_style_color()
         if cap and cap.is_done():
             result = cap.take()
             if result:
                 m["trigger"] = result
                 self._on_changed()
-            self._trig_caps.pop(idx, None)
+            if not cap.should_retain():
+                self._trig_caps.pop(idx, None)
 
         imgui.separator()
         imgui.text_colored((0.533, 0.533, 0.533, 1.0), "ACTIONS")

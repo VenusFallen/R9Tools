@@ -62,8 +62,13 @@ class RemapperUI(UIPanel):
 
             # FROM
             frm_cap = self._caps.get((i, "from"))
+            if frm_cap and not frm_cap.should_retain():
+                self._caps.pop((i, "from"), None)
+                frm_cap = None
             if frm_cap and frm_cap.capturing:
                 imgui.text_colored((0.133, 0.769, 0.369, 1.0), "Press any key/button...")
+            elif frm_cap and frm_cap.failed_active():
+                imgui.text_colored((1.0, 0.4, 0.4, 1.0), "Capture failed — try again")
             else:
                 frm_lbl = input_label(frm) or "(unbound)"
                 imgui.text("From:")
@@ -77,14 +82,20 @@ class RemapperUI(UIPanel):
                 if result:
                     mapping["from"] = result
                     self._on_changed()
-                self._caps.pop((i, "from"), None)
+                if not frm_cap.should_retain():
+                    self._caps.pop((i, "from"), None)
 
             imgui.same_line(0, 16)
 
             # TO
             to_cap = self._caps.get((i, "to"))
+            if to_cap and not to_cap.should_retain():
+                self._caps.pop((i, "to"), None)
+                to_cap = None
             if to_cap and to_cap.capturing:
                 imgui.text_colored((0.133, 0.769, 0.369, 1.0), "Press...")
+            elif to_cap and to_cap.failed_active():
+                imgui.text_colored((1.0, 0.4, 0.4, 1.0), "Capture failed — try again")
             else:
                 to_lbl = input_label(to) or "(unbound)"
                 imgui.text("To:")
@@ -98,7 +109,8 @@ class RemapperUI(UIPanel):
                 if result:
                     mapping["to"] = result
                     self._on_changed()
-                self._caps.pop((i, "to"), None)
+                if not to_cap.should_retain():
+                    self._caps.pop((i, "to"), None)
 
             imgui.same_line(0, 16)
             imgui.push_style_color(imgui.Col_.text, (1.0, 0.4, 0.4, 1.0))

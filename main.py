@@ -12,19 +12,79 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from crash_logging import setup_logging
 
-# Interception kernel filter driver service names
-_INTERCEPTION_SERVICES = ["keyboard_filter", "mouse_filter"]
+# Interception kernel filter driver service names.
+#
+# CONFIRMED (2026-08-22, urgent investigation into "completely non-functional
+# after fresh install"): these were previously "keyboard_filter"/"mouse_filter",
+# which do NOT exist under any circumstance -- installer_assets\
+# install-interception.exe (the actual oblitum/Interception command-line
+# installer bundled by R9Tools.iss) registers the driver's class upper-filter
+# services as plain "keyboard" and "mouse" (DisplayName "Keyboard/Mouse Upper
+# Filter Driver"), verified empirically via `sc.exe query` and a direct
+# registry dump of HKLM\SYSTEM\CurrentControlSet\Services\keyboard and
+# \mouse after running install-interception.exe /install by hand. The old
+# names meant `sc start`/`sc stop` here always failed with error 1060
+# (service does not exist) -- silently, since the return code was never
+# checked (see below) -- on every single run, on every machine, forever.
+# That said, this name fix alone does NOT make a *freshly installed* driver
+# usable this session: Interception is a legacy class filter driver loaded
+# by the PnP manager only when the Keyboard/Mouse device stacks next
+# enumerate, i.e. only after a reboot -- install-interception.exe itself
+# prints "Interception successfully installed. You must reboot for it to
+# take effect." every time it runs. See R9Tools.iss's NeedRestart()
+# handling for the installer-side half of this fix.
+_INTERCEPTION_SERVICES = ["keyboard", "mouse"]
+
+
+# ERROR_SERVICE_ALREADY_RUNNING. Interception's driver services are class
+# upper filters that the PnP manager loads automatically as part of the
+# Keyboard/Mouse device stack at boot (once the registry entries have
+# survived a reboot -- see the big comment above). That means a completely
+# healthy, already-working session will have this service already running
+# before the app ever calls `sc start`, and `sc start` on an
+# already-running service legitimately fails with this code -- it must NOT
+# be logged as a critical failure, or every normal session would log a
+# false alarm. This has not been empirically exercised post-reboot on this
+# service (see the driver-name comment above for what *has* been verified);
+# it's included defensively based on documented `sc`/Win32 service-control
+# semantics, not observed behavior.
+_ERROR_SERVICE_ALREADY_RUNNING = 1056
 
 
 def _interception_driver(start: bool) -> None:
     """Start or stop the Interception kernel filter driver services.
-    Requires administrator privileges (enforced by the OS)."""
+    Requires administrator privileges (enforced by the OS).
+
+    Failures are logged critically rather than silently swallowed -- this
+    was previously a bare subprocess.run() with no return-code check at
+    all, which made a missing/not-yet-loaded driver (e.g. right after a
+    fresh install, before the required reboot) completely invisible from
+    the app's own log, forcing manual `sc query` investigation to even
+    notice the driver wasn't there."""
     action = "start" if start else "stop"
     for svc in _INTERCEPTION_SERVICES:
-        subprocess.run(
+        result = subprocess.run(
             ["sc", action, svc],
             capture_output=True,   # suppress console output
+            text=True,
         )
+        if (
+            start
+            and result.returncode != 0
+            and result.returncode != _ERROR_SERVICE_ALREADY_RUNNING
+        ):
+            logging.critical(
+                "Interception driver service %r failed to %s (sc.exe exit "
+                "code %d): %s -- if this service also fails a manual "
+                "`sc query %s`, the Interception driver isn't loaded yet. "
+                "This is expected immediately after a fresh install/"
+                "reinstall (a reboot is required before Windows loads a "
+                "newly registered class filter driver); if it persists "
+                "after a reboot, the driver install itself likely failed.",
+                svc, action, result.returncode,
+                (result.stderr or result.stdout or "<no output>").strip(),
+                svc,
+            )
 
 import profiles as prof
 import updater
