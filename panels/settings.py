@@ -1,3 +1,4 @@
+import logging
 import sys
 import threading
 
@@ -31,8 +32,9 @@ class SettingsPanel(Panel):
         self._onCapture         = onCapture
         self._onThemeChanged    = onThemeChanged
 
-        self._appState     = "idle"
-        self._appLatestVer = ""
+        self._appState        = "idle"
+        self._appLatestVer    = ""
+        self._appInstallerPath = None
 
         self._build()
 
@@ -376,7 +378,7 @@ class SettingsPanel(Panel):
         elif self._appState == "available":
             self._startDownloadApp()
         elif self._appState == "ready":
-            self._doRestartApp()
+            self._doInstallApp()
 
     def _startCheckApp(self):
         self._appState = "checking"
@@ -397,6 +399,7 @@ class SettingsPanel(Panel):
                 self._sigAppStatus.emit("Up to date")
                 self._sigAppBtn.emit("Check", True)
         except Exception:
+            logging.exception("R9Tools update check failed")
             self._appState = "error"
             self._sigAppStatus.emit("Check failed")
             self._sigAppBtn.emit("Retry", True)
@@ -416,18 +419,28 @@ class SettingsPanel(Panel):
         try:
             def prog(pct):
                 self._sigAppStatus.emit(f"Downloading... {pct}%")
-            updater.download_app(prog)
+            self._appInstallerPath = updater.download_app(prog)
             self._appState = "ready"
-            self._sigAppStatus.emit("Ready — restart to apply")
-            self._sigAppBtn.emit("Restart Now", True)
+            self._sigAppStatus.emit("Ready to install")
+            self._sigAppBtn.emit("Install", True)
         except Exception:
+            logging.exception("R9Tools update download/extract failed")
             self._appState = "error"
             self._sigAppStatus.emit("Download failed")
             self._sigAppBtn.emit("Retry", True)
 
-    def _doRestartApp(self):
+    def _doInstallApp(self):
         from PySide6.QtWidgets import QApplication
-        updater.restart_app()
+        try:
+            updater.launch_installer_and_quit(self._appInstallerPath)
+        except Exception:
+            logging.exception("R9Tools update installer handoff failed")
+            self._appState = "error"
+            self._sigAppStatus.emit("Install failed")
+            self._sigAppBtn.emit("Retry", True)
+            return
+        # The installer is now running detached and independent of this
+        # process; quit so it can replace the currently-locked exe.
         QApplication.instance().quit()
 
 

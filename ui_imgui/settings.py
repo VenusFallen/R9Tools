@@ -1,4 +1,5 @@
 """Settings panel — imgui implementation (hotkeys, theme, window filter, updates)."""
+import logging
 import sys
 import threading
 import webbrowser
@@ -45,10 +46,11 @@ class SettingsUI(UIPanel):
         self._proc_list: list[str]  = [""] + _get_processes()
 
         # Updater state
-        self._app_state     = "idle"
-        self._app_status    = f"v{APP_VERSION}"
-        self._app_btn_label = "Check"
-        self._app_btn_en    = True
+        self._app_state         = "idle"
+        self._app_status        = f"v{APP_VERSION}"
+        self._app_btn_label     = "Check"
+        self._app_btn_en        = True
+        self._app_installer_path = None
 
     def reload(self, settings: dict):
         self._settings = settings
@@ -182,7 +184,7 @@ class SettingsUI(UIPanel):
         elif self._app_state == "available":
             self._start_download_app()
         elif self._app_state == "ready":
-            self._do_restart()
+            self._do_install()
 
     def _start_check_app(self):
         self._app_state, self._app_status = "checking", "Checking..."
@@ -199,6 +201,7 @@ class SettingsUI(UIPanel):
                 self._app_state, self._app_status = "up_to_date", "Up to date"
                 self._app_btn_label, self._app_btn_en = "Check", True
         except Exception:
+            logging.exception("R9Tools update check failed")
             self._app_state, self._app_status = "error", "Check failed"
             self._app_btn_label, self._app_btn_en = "Retry", True
 
@@ -215,15 +218,25 @@ class SettingsUI(UIPanel):
         try:
             def prog(pct):
                 self._app_status = f"Downloading... {pct}%"
-            updater.download_app(prog)
+            self._app_installer_path = updater.download_app(prog)
             self._app_state = "ready"
-            self._app_status = "Ready — restart to apply"
-            self._app_btn_label, self._app_btn_en = "Restart Now", True
+            self._app_status = "Ready to install"
+            self._app_btn_label, self._app_btn_en = "Install", True
         except Exception:
+            logging.exception("R9Tools update download/extract failed")
             self._app_state = "error"
             self._app_status = "Download failed"
             self._app_btn_label, self._app_btn_en = "Retry", True
 
-    def _do_restart(self):
-        updater.restart_app()
+    def _do_install(self):
+        try:
+            updater.launch_installer_and_quit(self._app_installer_path)
+        except Exception:
+            logging.exception("R9Tools update installer handoff failed")
+            self._app_state = "error"
+            self._app_status = "Install failed"
+            self._app_btn_label, self._app_btn_en = "Retry", True
+            return
+        # The installer is now running detached and independent of this
+        # process; quit so it can replace the currently-locked exe.
         self._on_quit()
