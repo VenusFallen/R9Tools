@@ -36,6 +36,45 @@ safe to call more than once (idempotent) and is designed to never raise —
 if the log directory can't be created/written for some reason, it silently
 falls back to a null configuration rather than taking down the app it's
 meant to protect.
+
+KNOWN-BENIGN NOISE — read before treating a logged AV as a real crash
+----------------------------------------------------------------------
+Every single session start (confirmed across v1.0.0–v1.1.4, 36/36 session
+starts in a ~20h live-testing window) logs exactly 3
+"Windows fatal exception: access violation" blocks from the DX11Overlay
+thread, all inside ``dx11_overlay.py``'s ``_create_window`` — twice at the
+``RegisterClassW`` call and once at ``CreateWindowExW`` — then the overlay
+proceeds and runs correctly for the rest of the session (crosshair,
+click-through, indicators all verified working live every time this was
+tested).
+
+This is a `faulthandler` false positive, not a real crash, confirmed by:
+  - Windows Event Viewer's Application log has ZERO "Application Error" /
+    "Windows Error Reporting" entries for R9Tools.exe or python.exe at any
+    of these 36 session-start timestamps/PIDs (checked both the exact time
+    window and the last 200 Application-log crash/hang events overall —
+    none belong to this app, ever).
+  - The log never shows "[DX11Overlay] Fatal: ..." (the message logged by
+    `_run`'s except-block) at these points — meaning `_create_window()`
+    ran to completion and returned normally every time; the "exception"
+    never actually propagated as a real Python-visible fault.
+  - On Windows, `faulthandler` installs its hook via a vectored exception
+    handler, which observes *every* first-chance exception in the process
+    — including ones fully caught and resolved internally further down the
+    call stack (e.g. by the GPU driver, DWM, or third-party software that
+    hooks window-creation APIs like `RegisterClassW`/`CreateWindowExW` via
+    guard-page/INT3-style instrumentation — a common technique for overlay
+    injectors and some security/EDR tools) — before returning
+    EXCEPTION_CONTINUE_SEARCH and letting execution resume normally. It is
+    not a last-chance/unhandled-exception filter, so seeing a dump here
+    does not by itself mean the process was ever in danger.
+
+Do NOT "fix" this by disabling faulthandler or by suppressing all AV
+reports — that would blind us to real future native crashes. If it needs
+addressing at all, the narrow fix is investigating why RegisterClassW/
+CreateWindowExW specifically trip a first-chance AV on this machine (likely
+third-party window-hooking software, not our code) — not weakening crash
+detection generally. Left alone as documented noise as of 2026-08-22.
 """
 import faulthandler
 import logging

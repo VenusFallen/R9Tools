@@ -125,6 +125,24 @@ def main():
     _interception_driver(start=True)
     qInstallMessageHandler(_qt_message_filter)
     app = QApplication(sys.argv)
+    # This app has no "main window" in the usual sense — panel_win/_TopBarWindow
+    # start hidden (see below) and only appear via the overlay hotkey, so any
+    # transient dialog (e.g. the auto-update-available QMessageBox below) can
+    # briefly be the ONLY visible top-level widget. Qt's default
+    # quitOnLastWindowClosed=True treats that dialog closing — via EITHER
+    # button, or even the titlebar X — as "the last window closed" and quits
+    # the whole app (and, since this runs under `if __name__ == "__main__"`,
+    # the whole process) right then. That's a real bug that was previously
+    # observed: clicking "Later" on the update dialog closed the entire app,
+    # and clicking "Update" raced the same auto-quit against the background
+    # download/install thread, so the install step's queued signal
+    # (_sigDoInstall, see panels/settings.py) sometimes never got delivered
+    # because the main event loop had already torn down. All real quit paths
+    # in this app are explicit (bridge.quitRequested -> app.quit(), the
+    # topbar's quit button, and updater's post-install app.quit()), so
+    # disabling this automatic behavior is safe and doesn't remove any way
+    # to actually quit.
+    app.setQuitOnLastWindowClosed(False)
 
     profileData = prof.load()
     cfg = prof.activeSettings(profileData)

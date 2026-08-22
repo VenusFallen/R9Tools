@@ -261,7 +261,7 @@ class SettingsPanel(Panel):
         aucl = QHBoxLayout(aucRow)
         aucl.setContentsMargins(10, 0, 10, 6)
         aucl.setSpacing(4)
-        aucLbl = QLabel("Automatically check for updates on launch", aucRow)
+        aucLbl = QLabel("Automatically check for updates", aucRow)
         aucLbl.setStyleSheet(f"color: {theme.LABEL_FG};")
         aucl.addWidget(aucLbl, 1)
         auc = self._settings.setdefault("auto_update_check", {"enabled": True})
