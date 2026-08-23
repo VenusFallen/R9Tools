@@ -3,31 +3,16 @@ Shared helper for standing up a validated interception.Interception()
 context and applying keyboard/mouse filters, retrying with backoff on
 transient driver bring-up failures.
 
-Why this exists
-----------------
-interception-python's Interception.__init__() opens handles to all 20
-possible device slots (\\\\.\\interceptionNN) and silently swallows any
-exception raised while doing so (it catches Exception internally and just
-calls self.destroy(), leaving self._devices however-far it got — possibly
-empty, possibly a partial list shorter than the 20 slots callers assume).
-Interception.set_filter() then indexes self._devices[i] for i in range(20)
-with zero bounds checking, so any transient failure to open even one device
-handle turns into an unhandled IndexError the instant set_filter() runs.
+Why: Interception.__init__() silently swallows exceptions while opening its
+20 device handles, and set_filter() then indexes them with no bounds
+checking — a partial open turns into an unhandled IndexError. This module
+gives every foreground, user-initiated keybind-capture thread (across both
+UI stacks) the same construct + validate + retry pattern
+RecoilEngine._bringUpInterception() uses for the background input engine,
+so a bring-up failure can't leave a capture UI permanently stuck.
 
-This has been observed in the wild as a fresh-install-time issue — see
-RecoilEngine._bringUpInterception() in recoil.py for the original diagnosis
-and fix, which covers the background input-engine startup path. This module
-extracts the same construct + validate + retry pattern for the several
-foreground, user-initiated keybind-capture threads scattered across both UI
-stacks (PySide6 panels + theme.py, and the DX11/ImGui panels), which hit the
-exact same failure mode but previously ran interception setup *outside*
-their try/finally — a failure there could leave a capture UI permanently
-stuck (hotkeys suspended, capture flag never reset, no way to recover short
-of restarting the app).
-
-This module is intentionally dependency-free (no PySide6, no imgui, no
-dcomp) so both UI stacks can import it without creating a cross-stack
-dependency between their module layouts.
+Intentionally dependency-free (no PySide6, no imgui, no dcomp) so both UI
+stacks can import it without a cross-stack dependency.
 """
 import logging
 import time
@@ -37,10 +22,10 @@ import interception
 log = logging.getLogger("r9tools.interception_bringup")
 
 # Foreground, user-initiated capture threads block a modal "press a
-# key..." UI rather than the whole app, so this budget is intentionally
-# much shorter than RecoilEngine._bringUpInterception()'s ~10s worst case —
-# it just needs to give a genuinely transient hiccup (e.g. driver still
-# settling shortly after a fresh install/reboot) a real chance to clear.
+# key..." UI, so this budget is much shorter than
+# RecoilEngine._bringUpInterception()'s ~10s worst case — just enough to
+# give a transient hiccup (e.g. driver still settling after a fresh
+# install/reboot) a chance to clear.
 DEFAULT_ATTEMPTS   = 8
 DEFAULT_BASE_DELAY = 0.05  # seconds, doubles each retry up to the cap
 DEFAULT_MAX_DELAY  = 0.3
@@ -74,11 +59,9 @@ def bringUpInterception(configure, attempts=DEFAULT_ATTEMPTS,
         inter = None
         try:
             inter = interception.Interception()
-            # A fully-settled driver context always has all 20 device
-            # slots open — a short list here means get_handles() hit a
-            # failure partway through and the exception was swallowed
-            # internally, i.e. this context is unusable even though
-            # construction "succeeded".
+            # A fully-settled driver context always has all 20 device slots
+            # open — a short list means get_handles() failed partway
+            # through and the exception was swallowed internally.
             if len(inter._devices) < 20:
                 raise RuntimeError(
                     f"Interception context incomplete: "
@@ -115,20 +98,12 @@ def bringUpInterception(configure, attempts=DEFAULT_ATTEMPTS,
 
 def destroyInterception(inter):
     """Tear down an interception.Interception() context returned by
-    bringUpInterception(), releasing its filtered device handles.
+    bringUpInterception(), releasing its filtered device handles. Safe to
+    call with inter=None and safe to call more than once.
 
-    Safe to call with inter=None (e.g. when bringUpInterception() itself
-    failed and returned None) and safe to call more than once on the same
-    context — any exception raised by destroy() (including on an
-    already-torn-down context) is swallowed, since by this point the
-    caller is unwinding and there is nothing useful to do with the error
-    besides leaving the process in whatever state it's already in.
-
-    Every foreground capture site that calls bringUpInterception() must
-    call this exactly once, unconditionally, in its finally block once it
-    is done reading from the context — otherwise the filtered handle is
-    left open (and capturing matching strokes) for the rest of the
-    process's lifetime.
+    Every capture site must call this exactly once, unconditionally, in its
+    finally block, or the filtered handle stays open (and capturing
+    matching strokes) for the rest of the process's lifetime.
     """
     if inter is None:
         return

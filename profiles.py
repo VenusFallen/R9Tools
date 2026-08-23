@@ -6,25 +6,17 @@ import shutil
 # ---------------------------------------------------------------------------
 # Persistent profiles.json location
 # ---------------------------------------------------------------------------
-# NOTE: previously this was `os.path.join(os.path.dirname(__file__), "profiles.json")`.
-# That is NOT stable in a PyInstaller onefile build: `__file__` for a frozen
-# module resolves inside the onefile extraction temp folder
-# (`%TEMP%\_MEIxxxxxx\`), which gets a brand-new random name every single
-# launch — so every real user's saved profile was silently discarded on
-# their very next app launch. Use a stable, per-user, always-writable
-# location instead, following the same directory-resolution pattern as
-# crash_logging.py's `_default_log_dir()` (LOCALAPPDATA, falling back to
-# TEMP/cwd, never raising). Use the same stable path whether running from
-# source or frozen, for consistency.
+# Must not be based on __file__: in a PyInstaller onefile build that resolves
+# inside the onefile extraction temp folder, which gets a new random name
+# every launch, silently discarding the user's saved profile each time. Uses
+# a stable per-user location instead, mirroring crash_logging.py's
+# `_default_log_dir()`.
 _PROFILES_DIR_NAME = "R9Tools"
 _PROFILES_FILE_NAME = "profiles.json"
 
-# The OLD (pre-fix) location: next to wherever this module lives. For a
-# source run this is the real repo directory (where a user's actual
-# profiles.json may already exist); for a frozen run this was always an
-# ephemeral onefile extraction dir and thus never had anything meaningful
-# to migrate. Kept only so `load()` can migrate a pre-existing file forward
-# one time — never written to going forward.
+# The OLD (pre-fix) location: next to wherever this module lives. Kept only
+# so `load()` can migrate a pre-existing file forward one time — never
+# written to going forward.
 _OLD_PROFILES_FILE = os.path.join(os.path.dirname(__file__), _PROFILES_FILE_NAME)
 
 
@@ -48,13 +40,9 @@ DEFAULT_NAME = "Default"
 
 def _migrate_old_profiles_file_if_needed() -> None:
     """One-time migration: if the new stable location doesn't have a
-    profiles.json yet, but an old (pre-fix) one exists next to this module,
-    copy it forward instead of silently creating fresh defaults.
-
-    Copies (never moves/deletes) the old file — safer, and it's gitignored
-    regardless so leaving it in place doesn't risk an accidental commit.
-    Safe to call unconditionally; never raises.
-    """
+    profiles.json yet but an old (pre-fix) one exists next to this module,
+    copy it forward instead of silently creating fresh defaults. Copies
+    rather than moves — safe to call unconditionally; never raises."""
     try:
         if os.path.exists(PROFILES_FILE):
             return
@@ -492,12 +480,7 @@ def loadProfile(data: dict, name: str) -> dict | None:
         macro["enabled"] = False
     # Toggles are force-disabled on profile load too, same rationale as
     # macros above — a toggle bound for one game shouldn't silently carry
-    # over active into a different profile/game without an explicit
-    # re-enable. (RecoilEngine's own updateSettings(full_reset=True) path,
-    # invoked separately by the profile-switch caller, is what forces the
-    # release of any toggle that was actively ON at switch time — this
-    # setting-level disable just prevents it from being re-armed afterward
-    # until the user opts back in.)
+    # over active into a different profile without an explicit re-enable.
     settings.setdefault("toggles", [])
     for tog in settings["toggles"]:
         tog["enabled"] = False

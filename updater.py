@@ -1,22 +1,11 @@
 """
 Auto-update helpers for R9Tools (self).
 
-R9Tools ships as a proper Inno Setup install (Program Files, Interception
-driver, Start Menu shortcuts, uninstall registry entry) rather than a
-portable single-exe app, so a self-update has to go through the same
-installer a fresh install does — that's the only path that keeps driver
-state, shortcuts, and the uninstall entry correctly in sync. This module:
-
-  1. Downloads the release zip asset (``R9Tools_v<version>.zip``) from the
-     latest GitHub release and extracts ``R9Tools_Setup.exe`` from it.
-  2. Launches that installer as a detached, silent (unattended, no wizard
-     UI, no reboot prompt) subprocess, independent of this process's
-     lifetime, and lets the caller quit the running app immediately after
-     so the installer's file-replace of the currently-installed
-     R9Tools.exe can proceed without a file lock in the way.
-
-LibreHardwareMonitor's DLLs are bundled directly in lib/ and ship with every
-R9Tools release — there is no separate runtime download/update path for them.
+R9Tools ships as an Inno Setup install rather than a portable exe, so a
+self-update re-runs the same installer (silently) instead of just swapping
+the exe, keeping driver state, shortcuts, and the uninstall entry in sync.
+Downloads the release zip, extracts R9Tools_Setup.exe, and launches it
+detached so it can replace this process's own files after it quits.
 
 Uses only the stdlib (urllib, zipfile, json) — no extra dependencies.
 """
@@ -152,9 +141,7 @@ def launch_installer_and_quit(installer_path: Path) -> None:
     lock on the currently-installed R9Tools.exe releases and the installer
     can replace it.
 
-    Flags (Inno Setup command-line silent-install switches — verified
-    empirically against the actual compiled R9Tools_Setup.exe pointed at a
-    throwaway /DIR=, not just assumed from memory):
+    Flags (Inno Setup command-line silent-install switches):
       /VERYSILENT          - no wizard UI at all; the "Installing..."
                               progress window itself is hidden too
                               (plain /SILENT still shows a progress window)

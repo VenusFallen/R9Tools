@@ -23,9 +23,9 @@ class SettingsPanel(Panel):
     # Signals emitted from background threads to update the UI safely
     _sigAppStatus = Signal(str)
     _sigAppBtn    = Signal(str, bool)   # (button_label, enabled)
-    # Internal: lets a background thread (the auto-continue chain used by
-    # triggerAutoUpdate()) hand install+quit off to the Qt main thread
-    # safely, since QApplication.quit() must be called from the main thread.
+    # Internal: hands install+quit off to the Qt main thread from a
+    # background download thread, since QApplication.quit() must be
+    # called from the main thread.
     _sigDoInstall = Signal()
 
     def __init__(self, parent, settings: dict, onSettingsChanged,
@@ -453,12 +453,9 @@ class SettingsPanel(Panel):
             self._appInstallerPath = updater.download_app(prog)
             self._appState = "ready"
             if auto_continue:
-                # The automatic startup-check flow only offers a single
-                # "Update" action (no separate Install step), so chain
-                # straight through to install+quit once the download
-                # finishes. _doInstallApp() calls QApplication.quit(), which
-                # must happen on the Qt main thread — hand off via signal
-                # rather than calling it directly from this download thread.
+                # Auto-continue chains straight to install+quit rather than
+                # stopping at "Ready to install"; _doInstallApp() must run
+                # on the Qt main thread, hence the signal hand-off.
                 self._sigAppStatus.emit("Installing...")
                 self._sigDoInstall.emit()
             else:
@@ -485,26 +482,11 @@ class SettingsPanel(Panel):
         QApplication.instance().quit()
 
     def triggerAutoUpdate(self, latest_version: str, on_status=None) -> None:
-        """
-        Programmatically start the download+install+quit flow for a version
-        already confirmed available by an out-of-band check — used by the
-        automatic startup update-check (see main.py's _onUpdateAvailable via
-        PanelWindow.triggerAutoUpdate). That flow's Update/Later prompt only
-        offers a single "Update" action, unlike this panel's own separate
-        Update-then-Install button steps, so this chains straight through to
-        install+quit once the download finishes instead of stopping at
-        "Ready to install".
-
-        Reuses the exact same updater.py-calling code this panel's own
-        Update/Install buttons use (_startDownloadApp -> _doDownloadApp ->
-        _doInstallApp) — nothing about the download/install/quit sequence
-        itself is duplicated here.
-
-        `on_status`, if given, is wired to the same status-text signal this
-        panel's own status label uses, so an external caller (e.g. a startup
-        progress dialog) can mirror progress without needing to know
-        anything about updater.py internals.
-        """
+        """Start the download+install+quit flow for a version already
+        confirmed available, reusing this panel's Update/Install code path
+        but chaining straight through instead of stopping at "Ready to
+        install". `on_status`, if given, mirrors this panel's status-text
+        updates to an external caller (e.g. a startup progress dialog)."""
         self._appLatestVer = latest_version
         self._appState = "available"
         if on_status is not None:

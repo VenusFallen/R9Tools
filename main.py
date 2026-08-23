@@ -12,55 +12,27 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from crash_logging import setup_logging
 
-# Interception kernel filter driver service names.
+# Interception kernel filter driver service names. install-interception.exe
+# (bundled by R9Tools.iss) registers these as "keyboard"/"mouse" (DisplayName
+# "Keyboard/Mouse Upper Filter Driver"), not "keyboard_filter"/"mouse_filter".
+# Interception is a legacy class upper-filter driver: after a fresh install
+# it only attaches to the Keyboard/Mouse device stacks on the next reboot —
+# see R9Tools.iss's NeedRestart() for the installer-side half of this.
 #
-# CONFIRMED (2026-08-22, urgent investigation into "completely non-functional
-# after fresh install"): these were previously "keyboard_filter"/"mouse_filter",
-# which do NOT exist under any circumstance -- installer_assets\
-# install-interception.exe (the actual oblitum/Interception command-line
-# installer bundled by R9Tools.iss) registers the driver's class upper-filter
-# services as plain "keyboard" and "mouse" (DisplayName "Keyboard/Mouse Upper
-# Filter Driver"), verified empirically via `sc.exe query` and a direct
-# registry dump of HKLM\SYSTEM\CurrentControlSet\Services\keyboard and
-# \mouse after running install-interception.exe /install by hand. The old
-# names meant `sc start`/`sc stop` here always failed with error 1060
-# (service does not exist) -- silently, since the return code was never
-# checked (see below) -- on every single run, on every machine, forever.
-# That said, this name fix alone does NOT make a *freshly installed* driver
-# usable this session: Interception is a legacy class filter driver loaded
-# by the PnP manager only when the Keyboard/Mouse device stacks next
-# enumerate, i.e. only after a reboot -- install-interception.exe itself
-# prints "Interception successfully installed. You must reboot for it to
-# take effect." every time it runs. See R9Tools.iss's NeedRestart()
-# handling for the installer-side half of this fix.
-#
-# DESIGN (2026-08-22, quit-time system-wide input freeze investigation):
-# these driver SERVICES are now meant to stay loaded/running permanently
-# once installed, for the lifetime of the machine session -- R9Tools no
-# longer stops them on quit (see the removed stop-on-quit call, below in
-# main()). Interception is a no-op passthrough at the driver level when no
-# process has an open, filtered device handle against it: leaving the
-# service running while R9Tools isn't even open has no behavioral effect on
-# the rest of the system. What actually determines whether system input is
-# captured is RecoilEngine's own open device handles (see recoil.py,
-# RecoilEngine.stop()/_destroyInterception()) -- closing those is a fast,
-# in-process operation, not a slow PnP-level driver detach, and is what
-# fixed the ~1s system-wide input freeze previously seen on every quit.
+# These services are meant to stay loaded/running permanently once
+# installed — R9Tools no longer stops them on quit. Interception is a no-op
+# passthrough with no open filtered device handle attached, so what
+# actually determines whether system input is captured is RecoilEngine's
+# own open device handles (see recoil.py's stop()/_destroyInterception()),
+# not the service's running state.
 _INTERCEPTION_SERVICES = ["keyboard", "mouse"]
 
 
 # ERROR_SERVICE_ALREADY_RUNNING. Interception's driver services are class
-# upper filters that the PnP manager loads automatically as part of the
-# Keyboard/Mouse device stack at boot (once the registry entries have
-# survived a reboot -- see the big comment above). That means a completely
-# healthy, already-working session will have this service already running
-# before the app ever calls `sc start`, and `sc start` on an
-# already-running service legitimately fails with this code -- it must NOT
-# be logged as a critical failure, or every normal session would log a
-# false alarm. This has not been empirically exercised post-reboot on this
-# service (see the driver-name comment above for what *has* been verified);
-# it's included defensively based on documented `sc`/Win32 service-control
-# semantics, not observed behavior.
+# upper filters the PnP manager loads automatically at boot, so a healthy
+# session will already have them running before `sc start` is ever called
+# — this must not be logged as a critical failure, or every normal session
+# would log a false alarm.
 _ERROR_SERVICE_ALREADY_RUNNING = 1056
 
 
@@ -68,22 +40,14 @@ def _interception_driver(start: bool) -> None:
     """Start or stop the Interception kernel filter driver services.
     Requires administrator privileges (enforced by the OS).
 
-    Failures are logged critically rather than silently swallowed -- this
-    was previously a bare subprocess.run() with no return-code check at
-    all, which made a missing/not-yet-loaded driver (e.g. right after a
-    fresh install, before the required reboot) completely invisible from
-    the app's own log, forcing manual `sc query` investigation to even
-    notice the driver wasn't there.
+    Failures are logged critically rather than silently swallowed, so a
+    missing/not-yet-loaded driver (e.g. right after a fresh install, before
+    the required reboot) is visible in the app's own log.
 
-    Only ever called with start=True now (once, at launch, as a fast,
-    idempotent safety net in case the driver isn't already running for
-    some reason -- ERROR_SERVICE_ALREADY_RUNNING makes a repeat `sc start`
-    on an already-running service cheap and harmless). The driver services
-    are deliberately never stopped from here anymore -- see the DESIGN
-    comment above _INTERCEPTION_SERVICES for why -- but the start=False
-    path is kept rather than deleted, since stopping the driver services
-    is still a legitimate thing for a future explicit uninstall/cleanup
-    flow to need."""
+    Only ever called with start=True now, once at launch as an idempotent
+    safety net — the driver services are deliberately never stopped from
+    here (see _INTERCEPTION_SERVICES above), but start=False is kept for a
+    possible future uninstall/cleanup flow."""
     action = "start" if start else "stop"
     for svc in _INTERCEPTION_SERVICES:
         result = subprocess.run(
@@ -126,15 +90,11 @@ from input_failed_notice import InputFailedNotice
 # before app.exec() is ever called.
 _AUTO_UPDATE_CHECK_DELAY_MS = 2000
 
-# Holds the live "Downloading update..." QMessageBox (if any) so it isn't
-# garbage-collected out from under itself: it's a parentless top-level
-# widget referenced only via a bound-method signal connection once
-# _onUpdateAvailable() returns, and PySide6/Qt silently disconnects (rather
-# than erroring) when a connected receiver is garbage-collected — so without
-# this, the dialog would be collected and its progress updates would
-# silently stop landing anywhere. Only one can ever be active at a time
-# (the automatic check only runs once per launch), so a single module-level
-# slot is sufficient.
+# Holds the live "Downloading update..." QMessageBox so it isn't
+# garbage-collected out from under its signal connection (PySide6 silently
+# disconnects a GC'd receiver instead of erroring). Only one can ever be
+# active (the automatic check runs once per launch), so a module-level slot
+# is enough.
 _auto_update_progress_dialog = None
 
 
@@ -209,23 +169,12 @@ def main():
     _interception_driver(start=True)
     qInstallMessageHandler(_qt_message_filter)
     app = QApplication(sys.argv)
-    # This app has no "main window" in the usual sense — panel_win/_TopBarWindow
-    # start hidden (see below) and only appear via the overlay hotkey, so any
-    # transient dialog (e.g. the auto-update-available QMessageBox below) can
-    # briefly be the ONLY visible top-level widget. Qt's default
-    # quitOnLastWindowClosed=True treats that dialog closing — via EITHER
-    # button, or even the titlebar X — as "the last window closed" and quits
-    # the whole app (and, since this runs under `if __name__ == "__main__"`,
-    # the whole process) right then. That's a real bug that was previously
-    # observed: clicking "Later" on the update dialog closed the entire app,
-    # and clicking "Update" raced the same auto-quit against the background
-    # download/install thread, so the install step's queued signal
-    # (_sigDoInstall, see panels/settings.py) sometimes never got delivered
-    # because the main event loop had already torn down. All real quit paths
-    # in this app are explicit (bridge.quitRequested -> app.quit(), the
-    # topbar's quit button, and updater's post-install app.quit()), so
-    # disabling this automatic behavior is safe and doesn't remove any way
-    # to actually quit.
+    # panel_win starts hidden, so a transient dialog (e.g. the update
+    # prompt) can briefly be the only visible top-level widget. Without
+    # this, Qt's default quitOnLastWindowClosed treats that dialog closing
+    # as "last window closed" and kills the whole app; all real quit paths
+    # here are explicit (bridge.quitRequested, topbar quit, post-install
+    # quit) so disabling it is safe.
     app.setQuitOnLastWindowClosed(False)
 
     profileData = prof.load()
@@ -268,18 +217,11 @@ def main():
     # the lifetime of main() (i.e. until app.exec() returns).
     input_failed_notice = InputFailedNotice(bridge)
 
-    # Combined "is input currently failed" state, feeding dx_overlay's
-    # single red-badge bool. Two independent sources:
-    #   - old path (recoil.py's I/O-exception counter, via
-    #     bridge.inputEngineFailed): sticky for the whole session, no known
-    #     recovery — see _onOldPathFailed below.
-    #   - new path (device_watch.py's WM_DEVICECHANGE detection, via
-    #     bridge.deviceInputFailed/deviceInputRecovered): tracks the
-    #     currently-failed device instance ID list, can grow/shrink/empty
-    #     out again over the session as devices fail and recover.
-    # Both mutations below only ever happen on the Qt main thread (bridge
-    # QueuedConnection slots, and nativeEventFilter-originated direct calls
-    # from panel_win are already main-thread) — no lock needed.
+    # Combined "is input currently failed" state feeding dx_overlay's single
+    # red-badge bool: "old" (recoil.py's I/O-exception counter) is sticky
+    # for the session with no recovery, "devices" (device_watch.py's
+    # WM_DEVICECHANGE detection) can grow/shrink as devices fail/recover.
+    # Both mutations only ever happen on the Qt main thread — no lock needed.
     _input_fail_state = {"old": False, "devices": []}
 
     def _recomputeBadge():
@@ -300,14 +242,10 @@ def main():
         _recomputeBadge()
         bridge.deviceInputRecovered.emit(list(ids))
 
-    # panel_win owns the real HWND device-change notifications are
-    # registered against (see panel_window.py's _TopBarWindow /
-    # device_watch.py) — these callbacks run directly on the Qt main
-    # thread (nativeEventFilter), no signal/queueing needed for
-    # thread-safety, but deviceInputFailed/deviceInputRecovered are still
-    # re-emitted as bridge Signals above so input_failed_notice.py stays
-    # decoupled from panel_window internals, same as every other
-    # UI-facing notification in this app.
+    # panel_win owns the HWND device-change notifications are registered
+    # against, so these callbacks run directly on the Qt main thread
+    # (nativeEventFilter) — still re-emitted as bridge Signals so
+    # input_failed_notice.py stays decoupled from panel_window internals.
     panel_win.setDeviceFailureCallbacks(_onDeviceInputFailed, _onDeviceInputRecovered)
 
     # Bridge → UI
@@ -342,22 +280,11 @@ def main():
     engine.setToggleCallback(bridge.recoilToggled.emit)
     engine.setStrengthCallback(bridge.strengthChanged.emit)
     engine.setQuitCallback(bridge.quitRequested.emit)
-    # No hotkeys/remaps/macros/mouse-forwarding work at all if this fires —
-    # see RecoilEngine._bringUpInterception(). Fires exactly once, whether
-    # from the startup bring-up failure path or the mid-session detection
-    # path, and is called from the engine's background listen thread — not
-    # the Qt main thread — so anything UI-facing goes through the bridge
-    # Signal (auto-queued onto the main thread), same as every other
-    # cross-thread callback in this app; see bridge.py.
-    #
-    # logging.critical() is kept as-is alongside the new signal emission —
-    # it's a guaranteed-to-run main-thread-independent breadcrumb in case
-    # logging setup itself is degraded, and predates the signal below.
-    #
-    # The red "Input Failed" badge state (dx_overlay.set_input_failed, via
-    # _onOldPathFailed/_recomputeBadge above) and the non-modal notice/quit
-    # flow (input_failed_notice.py) are both connected to
-    # bridge.inputEngineFailed above.
+    # No hotkeys/remaps/macros/mouse-forwarding work at all if this fires
+    # (see RecoilEngine._bringUpInterception()). Called from the engine's
+    # background listen thread, so UI-facing work goes through the bridge
+    # Signal (auto-queued onto the main thread); logging.critical() is kept
+    # as a main-thread-independent breadcrumb in case logging is degraded.
     def _onInputEngineFailed():
         logging.critical(
             "R9Tools input engine failed to start — the app is running but "
@@ -376,30 +303,21 @@ def main():
     dx_overlay.start()
     stats_poller.start()
 
-    # A few seconds after the event loop is up and running (well after
-    # driver init / engine start / overlay start above, so it never
-    # competes with those for startup time) — check for a newer release in
-    # the background. This is purely additive on top of the existing manual
-    # "Check for Updates" button in Settings; it doesn't touch that flow.
+    # Delayed so it never competes with driver/engine/overlay init for
+    # startup time; purely additive on top of the manual "Check for
+    # Updates" button in Settings.
     QTimer.singleShot(_AUTO_UPDATE_CHECK_DELAY_MS, lambda: _startAutoUpdateCheck(cfg, bridge))
 
     # panel_win starts hidden; overlay hotkey shows/hides it
     app.exec()
 
-    # engine.stop() now destroys RecoilEngine's own Interception context
-    # (closing its open, filtered keyboard/mouse device handles) as the
-    # FIRST thing it does, before joining any of its threads — see
-    # RecoilEngine.stop()/_destroyInterception() in recoil.py. That's what
-    # actually releases system-wide input, not the driver SERVICE being
-    # stopped: the driver deliberately stays loaded/running across app
-    # sessions now (see _INTERCEPTION_SERVICES comment above), and closing
-    # this process's device handles is what determines whether the driver
-    # has anything to capture. There is deliberately no
-    # `_interception_driver(start=False)` call here anymore — stopping the
-    # driver service on quit was the slow, ~1s, PnP-level operation
-    # previously responsible for the system-wide keyboard/mouse freeze
-    # testers reported when closing the app; it is no longer part of the
-    # quit path at all.
+    # engine.stop() closes RecoilEngine's own Interception device handles
+    # first, before joining threads — that's what actually releases
+    # system-wide input, not the driver service (which stays running
+    # across sessions, see _INTERCEPTION_SERVICES above). There is
+    # deliberately no _interception_driver(start=False) call here anymore;
+    # stopping the service was the slow PnP operation that used to cause a
+    # system-wide input freeze on quit.
     engine.stop()
 
     macro_engine.stop()

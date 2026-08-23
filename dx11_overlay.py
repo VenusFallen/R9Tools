@@ -15,14 +15,9 @@ Architecture:
   - main thread → overlay: thread-safe setters (all guarded by GIL / simple assign)
   - StatsPoller → overlay: update_stats(dict) protected by threading.Lock
   - Always click-through: WS_EX_LAYERED | WS_EX_TRANSPARENT makes DWM resolve
-    hit-testing automatically — no custom WM_NCHITTEST handling is needed.
-    (An earlier version of this window relied on a WM_NCHITTEST handler
-    unconditionally returning HTTRANSPARENT for click-through, predating the
-    WS_EX_LAYERED fix below; empirically confirmed removable — see the
-    ex_style comment in _create_window for the click-through history and
-    the live SendInput test results that justified removing it: 20/20 clicks
-    reached the window underneath across 4 independent runs with the
-    handler removed, matching 10/10 with it present.)
+    hit-testing automatically — no custom WM_NCHITTEST handling is needed
+    (see the ex_style comment in _create_window for why WS_EX_LAYERED is
+    load-bearing here).
 """
 import ctypes
 import ctypes.wintypes as wintypes
@@ -178,12 +173,9 @@ class DX11Overlay:
         self._si_value   = None
         self._si_until   = 0.0
 
-        # Driven by set_input_failed() below — see that method's docstring
-        # for the two distinct callers (old sticky I/O-exception-counter
-        # path vs. new recoverable WM_DEVICECHANGE path) and how main.py
-        # combines them. Simple bool assignment, read every frame by this
-        # (separate) render thread; same "guarded by GIL / simple assign"
-        # thread-safety convention as _ch_visible/_ind_visible above.
+        # Driven by set_input_failed() below; simple bool assign, read every
+        # frame by this (separate) render thread, same GIL-guarded
+        # convention as _ch_visible/_ind_visible above.
         self._input_failed = False
 
         self._stats_lock = threading.Lock()
@@ -249,23 +241,9 @@ class DX11Overlay:
     def set_input_failed(self, failed: bool = True):
         """Turns the always-on running-indicator badge red and adds an
         'Input Failed' label underneath it (failed=True), or reverts it to
-        the normal badge (failed=False).
-
-        Two independent callers, both wired in main.py:
-          - The old I/O-exception-counter path (RecoilEngine /
-            bridge.inputEngineFailed) always calls this with the default
-            failed=True, exactly once per session, and main.py's combining
-            logic guarantees it's never overridden back to False by the
-            path below — that failure mode has no known recovery short of
-            a restart.
-          - The new WM_DEVICECHANGE path (device_watch.py /
-            bridge.deviceInputFailed / bridge.deviceInputRecovered) can
-            call this with either True or False, potentially more than
-            once per session, as specific devices fail and recover.
-
-        main.py is what actually combines both sources into the single
-        bool passed here — this method itself has no memory of who called
-        it or why, it just reflects whatever it's told."""
+        the normal badge (failed=False). main.py combines two sources
+        (the sticky I/O-exception path and the recoverable WM_DEVICECHANGE
+        path) into the single bool passed here."""
         self._input_failed = failed
 
     # ------------------------------------------------------------------
@@ -302,13 +280,9 @@ class DX11Overlay:
                     self._on_resize(w, h)
             return 0
         if msg == _WM_DISPLAYCHANGE:
-            # Fired when the display resolution changes while R9Tools is
-            # already running (e.g. a game switching into a custom exclusive-
-            # fullscreen resolution). _create_window() only queried
-            # GetSystemMetrics once at startup, so without this the overlay
-            # window — and every centre-point calc that reads self._sw/_sh
-            # (crosshair, indicators, stats, strength indicator) — would stay
-            # pinned to the stale startup resolution until the app restarts.
+            # Without this, self._sw/_sh (and every centre-point calc that
+            # reads them) would stay pinned to the stale startup resolution
+            # after a live resolution change until the app restarts.
             self._handle_display_change()
             return 0
         return _DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -330,64 +304,14 @@ class DX11Overlay:
         self._sw = sw
         self._sh = sh
 
-        # WS_EX_NOREDIRECTIONBITMAP: no GDI-accessible surface for this window.
-        # DComp owns the visual content; DWM uses the DXGI swap chain directly.
-        #
-        # WS_EX_LAYERED is REQUIRED here even though we never call
-        # SetLayeredWindowAttributes/UpdateLayeredWindow (DComp fully owns the
-        # rendered content, so it does not force DWM's legacy GDI composition
-        # path or kill Independent Flip). Empirically verified live on this
-        # machine: WS_EX_TRANSPARENT + a WM_NCHITTEST handler returning
-        # HTTRANSPARENT alone does NOT reliably achieve click-through for a
-        # full-screen WS_EX_NOREDIRECTIONBITMAP/DirectComposition popup window
-        # — the window correctly reports HTTRANSPARENT (confirmed via a direct
-        # synchronous SendMessageW(WM_NCHITTEST) probe) yet real SendInput
-        # clicks were still swallowed and never reached the window underneath
-        # (repro: tests/manual — click a Notepad window positioned under the
-        # overlay; GetForegroundWindow never changed to Notepad while the
-        # overlay was running, 3/3 runs). Adding WS_EX_LAYERED to the ex-style
-        # bitmask (with no layered surface ever populated) restored real
-        # click-through 3/3 runs, with rendering confirmed still visible via
-        # screen-pixel capture (crosshair pixels present at the expected
-        # on-screen location). Do not remove this flag without re-verifying
-        # click-through with a live SendInput test — do not trust WM_NCHITTEST
-        # diagnostics/print output alone, they can look correct while clicks
-        # still don't pass through.
-        #
-        # KNOWN TRADEOFF — NOT YET VERIFIED, FLAG BEFORE SHIPPING: imgui_overlay.py
-        # (the parallel DX11/ImGui stack, not currently launched by main.py)
-        # carries a header comment claiming WS_EX_LAYERED previously caused a
-        # measured 196->147 FPS regression on this DComp/NOREDIRECTIONBITMAP
-        # window architecture, and deliberately avoids WS_EX_LAYERED for that
-        # reason — using WM_NCHITTEST alone instead. That WM_NCHITTEST-alone
-        # technique (WS_EX_NOREDIRECTIONBITMAP, no WS_EX_TRANSPARENT, no
-        # WS_EX_LAYERED) was independently repro'd here and did NOT achieve
-        # real click-through either (see live SendInput test results), so
-        # imgui_overlay.py likely has the same click-through bug this file had.
-        # This fix (adding WS_EX_LAYERED) was verified to restore click-through
-        # and to still render correctly (crosshair pixels confirmed present via
-        # screen capture), but in-game FPS impact was NOT measured here (no
-        # GPU-bound game was running during testing) — if the same regression
-        # shows up here, that must be weighed against "the app is otherwise
-        # completely unusable" and a non-LAYERED alternative investigated.
-        #
-        # FOLLOW-UP (later session): with WS_EX_LAYERED confirmed working live
-        # in-game (desktop + Ghost Recon Breakpoint, real user testing), a
-        # further question was whether the WM_NCHITTEST → HTTRANSPARENT
-        # handler in _wnd_proc (which predates the WS_EX_LAYERED fix) was
-        # still doing anything, or just redundant now that WS_EX_LAYERED +
-        # WS_EX_TRANSPARENT lets DWM resolve hit-testing on its own. Tested
-        # empirically, not assumed: with the WM_NCHITTEST handler removed
-        # entirely (falling through to DefWindowProcW), a live SendInput
-        # click-through test (two real Win32 windows on either side of the
-        # screen, alternating clicks, checking GetForegroundWindow() actually
-        # flips to the clicked window) passed 20/20 across 4 independent runs
-        # — identical to 10/10 with the handler present. This matches the
-        # render-loop diagnostic history: nchittest_count was already
-        # observed to be 0 during passing runs even when the handler existed,
-        # meaning DWM wasn't calling into it at all. The handler was removed
-        # as dead code. If click-through ever regresses, WS_EX_LAYERED here
-        # is the load-bearing flag to check first, not WM_NCHITTEST.
+        # WS_EX_NOREDIRECTIONBITMAP: no GDI-accessible surface for this window;
+        # DComp owns the visual content and DWM reads the DXGI swap chain directly.
+        # WS_EX_LAYERED is required for real click-through here even though
+        # SetLayeredWindowAttributes/UpdateLayeredWindow are never called —
+        # WS_EX_TRANSPARENT + WM_NCHITTEST alone let clicks get swallowed on this
+        # window type. Don't remove it without re-verifying click-through with a
+        # live SendInput test, since WM_NCHITTEST diagnostics alone can look
+        # correct while clicks still don't pass through.
         ex_style = (_WS_EX_TOPMOST | _WS_EX_NOACTIVATE | _WS_EX_TOOLWINDOW
                     | _WS_EX_TRANSPARENT | _WS_EX_NOREDIRECTIONBITMAP
                     | _WS_EX_LAYERED)
@@ -471,13 +395,12 @@ class DX11Overlay:
         FRAME         = 1.0 / 60.0
         _had_content  = False   # True when last frame had visible content
 
-        # IMPORTANT: this window is WS_EX_TOPMOST + WS_EX_TRANSPARENT + LAYERED
-        # and is the click-through gate for the whole screen. Click-through
-        # itself is resolved by DWM automatically (see _create_window's
-        # ex_style comment — no WM_NCHITTEST handling happens in _wnd_proc,
-        # confirmed redundant via live testing). Messages are still pumped
-        # every frame here regardless, so WM_SIZE/WM_DESTROY are serviced
-        # promptly rather than being delayed up to POLL_INTERVAL.
+        # This window is WS_EX_TOPMOST + WS_EX_TRANSPARENT + LAYERED and is
+        # the click-through gate for the whole screen; DWM resolves
+        # click-through automatically (see _create_window's ex_style
+        # comment). Messages are pumped every frame regardless, so
+        # WM_SIZE/WM_DESTROY are serviced promptly rather than delayed up
+        # to POLL_INTERVAL.
         while self._running:
             t0 = time.monotonic()
 
@@ -504,13 +427,10 @@ class DX11Overlay:
                               _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE)
 
             # Diagnostics — periodic sanity check that the ex-style bits this
-            # window depends on for click-through (TRANSPARENT/LAYERED) and
-            # z-order (TOPMOST) haven't been stripped by the OS/DWM at
-            # runtime. Do not rely on this alone to diagnose click-through
-            # regressions — these bits can read back correctly while clicks
-            # still fail for other reasons (this happened before the
-            # WS_EX_LAYERED fix); use a live SendInput + GetForegroundWindow
-            # (or similar real behavioral) test instead.
+            # window depends on for click-through and z-order haven't been
+            # stripped by the OS/DWM at runtime. Not sufficient alone to
+            # diagnose click-through regressions — use a live SendInput +
+            # GetForegroundWindow test instead.
             if t0 - last_diag >= _DIAG_INTERVAL:
                 exstyle = _GetWindowLongPtrW(self._hwnd, _GWL_EXSTYLE)
                 print(f"[DX11Overlay] exstyle sanity check: "
@@ -683,17 +603,11 @@ class DX11Overlay:
 
     def _draw_running_indicator(self, r: Renderer):
         """Small power-button badge with 'R9' centered inside, fixed to the
-        top-right corner (same _MARGIN convention as the stats HUD / module
-        indicators). Deliberately separate from _draw_module_indicators —
-        this is a standalone "app is alive" status badge, not tied to
-        recoil/rapidfire state.
-
-        When self._input_failed is set (see set_input_failed()), the badge
-        turns red and gains an "Input Failed" label underneath it — the
-        Insert-hotkey-driven panel is dead at that point (no input capture
-        at all), so this always-on-screen badge is the only passive signal
-        left that something is wrong; the non-modal notice/quit flow (see
-        input_failed_notice.py) is the active one."""
+        top-right corner. Standalone "app is alive" status badge, not tied
+        to recoil/rapidfire state (see _draw_module_indicators for those).
+        Turns red with an "Input Failed" label when self._input_failed is
+        set — the only passive signal left once input capture is dead
+        (see input_failed_notice.py for the active notice/quit flow)."""
         radius    = 20.0
         thickness = 2.0
         pad       = 6.0   # keep the ring's own margin off the screen edge
@@ -866,11 +780,10 @@ class DX11Overlay:
     def _handle_display_change(self):
         """Re-query the (possibly changed) primary-monitor resolution and
         resize/reposition the window to match. Dropping the SWP_NOMOVE/
-        SWP_NOSIZE flags used elsewhere means this SetWindowPos call actually
-        changes the window's size, which synchronously dispatches a WM_SIZE
-        back into _wnd_proc (same thread) — that's what drives the swap
-        chain/RTV/viewport rebuild via the existing _on_resize() path, so
-        the DX11-side resize work only lives in one place."""
+        SWP_NOSIZE flags used elsewhere means this actually changes the
+        window's size, synchronously dispatching WM_SIZE back into
+        _wnd_proc, which drives the swap chain/RTV/viewport rebuild via
+        the existing _on_resize() path."""
         sw = _user32.GetSystemMetrics(_SM_CXSCREEN)
         sh = _user32.GetSystemMetrics(_SM_CYSCREEN)
         if sw <= 0 or sh <= 0:

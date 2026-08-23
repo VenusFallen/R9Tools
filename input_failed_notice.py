@@ -2,44 +2,27 @@
 input_failed_notice.py — non-modal "R9Tools has lost input" notification,
 plus the modal dismiss-confirm loop that follows it.
 
-Two independent trigger paths feed the same window, in-place:
+Two independent trigger paths feed the same window in place rather than
+stacking two popups:
 
-  - OLD path: bridge.inputEngineFailed (recoil.py's consecutive-I/O-
-    exception counter — see RecoilEngine._onInterceptionIoFailure). No-arg,
-    fires exactly once per session, no specific device known. trigger()
-    puts this window into "old" mode: a single "Dismiss" button leading
-    into a modal restart-required confirmation. This mode is STICKY for
-    the rest of the session — see triggerDevices()/recoverDevices() below
-    — since a broad, untargeted restart is riskier than one aimed at a
-    known device (confirmed this session: `pnputil /restart-device`
-    without a specific target broke a previously-working device and
-    required a full reboot to fix), so once we're in this mode we never
-    offer the new path's "Try to Reconnect" action.
+  - OLD path: bridge.inputEngineFailed (recoil.py's I/O-exception counter).
+    No device known, fires once per session; puts the window in "old" mode
+    (Dismiss-only, leads into a restart-required confirmation) and stays
+    there for the rest of the session — a broad, untargeted device restart
+    is riskier than one aimed at a known device, so "old" mode never offers
+    "Try to Reconnect".
 
   - NEW path: bridge.deviceInputFailed / bridge.deviceInputRecovered
-    (device_watch.py's WM_DEVICECHANGE-based detection — see
-    DeviceFailureWatcher). Carries specific device instance ID(s), and can
-    fire/clear more than once per session (a device can be disabled,
-    reconnected, then disabled again). triggerDevices()/recoverDevices()
-    put/keep this window in "device" mode: a second "Try to Reconnect"
-    button alongside "Ignore", targeting exactly the currently-known-failed
-    device(s) via Disable-PnpDevice + Enable-PnpDevice (confirmed live to
-    recover an already-broken Interception connection with zero app
-    restart/reboot — see _attempt_pnp_reconnect()). No success/failure
-    claim is ever made for a reconnect attempt — recovery is only ever
-    reported back through the same WM_DEVICECHANGE detection that's
-    already watching (recoverDevices(), called independently of whether a
-    reconnect was even attempted).
+    (device_watch.py's WM_DEVICECHANGE detection). Carries specific device
+    instance ID(s) and can fire/clear repeatedly; puts/keeps the window in
+    "device" mode with a "Try to Reconnect" button that disables+re-enables
+    exactly the failed device(s) (see _attempt_pnp_reconnect()). No success/
+    failure claim is made for a reconnect attempt — recovery is only ever
+    reported back through the same WM_DEVICECHANGE detection.
 
-Both paths ultimately share one window instance rather than stacking two
-popups — see trigger()/triggerDevices() for exactly how they're unified.
-
-Independent top-level window, deliberately NOT parented into
-PanelWindow's (normally hidden) widget tree: the whole point is that this
-can appear on its own even while the panel/topbar are hidden and the
-Insert hotkey that would normally reveal them is dead (no input capture
-at all once the old path has fired; the new path may still leave *other*
-devices working, but the failed device(s) themselves are unresponsive).
+Independent top-level window, deliberately NOT parented into PanelWindow's
+widget tree: it can appear on its own even while the panel/topbar (and the
+hotkey that would reveal them) are hidden.
 """
 import logging
 import subprocess
@@ -52,22 +35,17 @@ from PySide6.QtWidgets import (
 
 import theme
 
-# Confirmed live this session: disabling then re-enabling the SPECIFIC
-# failed device's instance ID recovers an already-open, already-broken
-# Interception connection with zero app restart and zero reboot. Do NOT
-# use `pnputil /restart-device` here or anywhere else — that was also
-# tested and BROKE a working device, requiring a full reboot to fix.
+# Disabling then re-enabling the specific failed device's instance ID
+# recovers an already-broken Interception connection with no app restart or
+# reboot needed. Do NOT use `pnputil /restart-device` instead — it can break
+# a working device and force a full reboot to fix.
 _PNP_TIMEOUT_S = 20
 
 
 def _attempt_pnp_reconnect(instance_id: str) -> None:
     """Disable then re-enable one specific PnP device via PowerShell.
-    Never raises — failures are logged only, since the caller deliberately
-    makes no success/failure claim to the user (see module docstring).
-    Matches this codebase's existing pattern of shelling out to
-    sc.exe/tasklist.exe for driver/process control (main.py) rather than a
-    native Win32 CM_* API — reliability over micro-optimizing away a
-    process spawn for a one-time, user-initiated action."""
+    Never raises — failures are logged only, since the caller makes no
+    success/failure claim to the user (see module docstring)."""
     escaped = instance_id.replace("'", "''")  # defensive; instance IDs don't normally contain quotes
     for verb in ("Disable-PnpDevice", "Enable-PnpDevice"):
         cmd = f"{verb} -InstanceId '{escaped}' -Confirm:$false"
@@ -135,10 +113,8 @@ class InputFailedNotice(QWidget):
         layout.addLayout(btnRow)
 
     # ------------------------------------------------------------------
-    # OLD path — bridge.inputEngineFailed. Behavior unchanged from before
-    # the new path existed, except it now also takes over ("converts") an
-    # already-visible "device" mode window in place, instead of a second
-    # window ever appearing — see module docstring.
+    # OLD path — bridge.inputEngineFailed. Converts an already-visible
+    # "device" mode window in place rather than stacking a second window.
     # ------------------------------------------------------------------
 
     def trigger(self):
@@ -161,11 +137,8 @@ class InputFailedNotice(QWidget):
 
     # ------------------------------------------------------------------
     # NEW path — bridge.deviceInputFailed / bridge.deviceInputRecovered.
-    # Both are emitted with the QueuedConnection PySide6 applies to any
-    # cross-thread signal, and in this case are also emitted directly from
-    # the Qt main thread (nativeEventFilter callbacks) to begin with — see
-    # device_watch.py / panel_window.py / main.py — so this is always safe
-    # to touch widgets directly here too.
+    # Both fire from nativeEventFilter callbacks already on the Qt main
+    # thread, so it's safe to touch widgets directly here too.
     # ------------------------------------------------------------------
 
     def triggerDevices(self, ids: list):
@@ -173,10 +146,7 @@ class InputFailedNotice(QWidget):
         device_watch.DeviceFailureWatcher for exactly when this fires
         (debounced + batched — never on every raw remove/arrival blip)."""
         if self._mode == "old":
-            # Old path is sticky/terminal for the session — see module
-            # docstring for why we don't downgrade an unrecoverable-restart
-            # notice back into a recoverable-looking one.
-            return
+            return  # old path is sticky/terminal for the session — see module docstring
         self._mode = "device"
         self._deviceIds = list(ids)
         self._reconnecting = False
@@ -191,11 +161,8 @@ class InputFailedNotice(QWidget):
     def recoverDevices(self, ids: list):
         """The remaining settled-failed device set after a recovery — see
         device_watch.DeviceFailureWatcher.on_recovered. An empty list means
-        every previously-failed device has come back (whether from a
-        manual physical reconnect, a successful "Try to Reconnect"
-        attempt, or any other cause) — this is the ONLY place that clears
-        "device" mode; no explicit success/failure claim is ever made for
-        a reconnect attempt itself (see _onReconnectClicked)."""
+        every previously-failed device has come back; this is the only
+        place that clears "device" mode."""
         if self._mode != "device":
             return  # never triggered, or old path is sticky — nothing to update
         self._deviceIds = list(ids)
@@ -241,7 +208,7 @@ class InputFailedNotice(QWidget):
         """Runs on a background thread — never touches Qt widgets directly
         (see bridge.reconnectAttemptFinished, auto-queued back onto the
         main thread). Each PnP cmdlet call has real latency (~1-2s to
-        settle based on live testing), hence the background thread."""
+        settle), hence the background thread."""
         for instance_id in ids:
             _attempt_pnp_reconnect(instance_id)
         self._bridge.reconnectAttemptFinished.emit()
@@ -273,13 +240,8 @@ class InputFailedNotice(QWidget):
         ) == QMessageBox.StandardButton.Yes
 
         if confirmed:
-            # Single, documented quit path for this app — see main.py's
-            # app.setQuitOnLastWindowClosed(False) comment: "All real quit
-            # paths in this app are explicit (bridge.quitRequested ->
-            # app.quit(), the topbar's quit button, and updater's
-            # post-install app.quit())". Goes through the normal
-            # engine.stop() shutdown sequence, which is safe to call even
-            # with a dead/failed Interception context.
+            # Goes through the normal engine.stop() shutdown sequence,
+            # which is safe to call even with a dead/failed Interception context.
             self._bridge.quitRequested.emit()
             return
 
