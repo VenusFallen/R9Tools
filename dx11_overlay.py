@@ -178,6 +178,14 @@ class DX11Overlay:
         self._si_value   = None
         self._si_until   = 0.0
 
+        # Driven by set_input_failed() below — see that method's docstring
+        # for the two distinct callers (old sticky I/O-exception-counter
+        # path vs. new recoverable WM_DEVICECHANGE path) and how main.py
+        # combines them. Simple bool assignment, read every frame by this
+        # (separate) render thread; same "guarded by GIL / simple assign"
+        # thread-safety convention as _ch_visible/_ind_visible above.
+        self._input_failed = False
+
         self._stats_lock = threading.Lock()
         self._stats_data: dict = {}
 
@@ -237,6 +245,28 @@ class DX11Overlay:
     def show_strength_indicator(self, value: int):
         self._si_value = value
         self._si_until = time.monotonic() + 0.5
+
+    def set_input_failed(self, failed: bool = True):
+        """Turns the always-on running-indicator badge red and adds an
+        'Input Failed' label underneath it (failed=True), or reverts it to
+        the normal badge (failed=False).
+
+        Two independent callers, both wired in main.py:
+          - The old I/O-exception-counter path (RecoilEngine /
+            bridge.inputEngineFailed) always calls this with the default
+            failed=True, exactly once per session, and main.py's combining
+            logic guarantees it's never overridden back to False by the
+            path below — that failure mode has no known recovery short of
+            a restart.
+          - The new WM_DEVICECHANGE path (device_watch.py /
+            bridge.deviceInputFailed / bridge.deviceInputRecovered) can
+            call this with either True or False, potentially more than
+            once per session, as specific devices fail and recover.
+
+        main.py is what actually combines both sources into the single
+        bool passed here — this method itself has no memory of who called
+        it or why, it just reflects whatever it's told."""
+        self._input_failed = failed
 
     # ------------------------------------------------------------------
     # Background thread
@@ -656,7 +686,14 @@ class DX11Overlay:
         top-right corner (same _MARGIN convention as the stats HUD / module
         indicators). Deliberately separate from _draw_module_indicators —
         this is a standalone "app is alive" status badge, not tied to
-        recoil/rapidfire state."""
+        recoil/rapidfire state.
+
+        When self._input_failed is set (see set_input_failed()), the badge
+        turns red and gains an "Input Failed" label underneath it — the
+        Insert-hotkey-driven panel is dead at that point (no input capture
+        at all), so this always-on-screen badge is the only passive signal
+        left that something is wrong; the non-modal notice/quit flow (see
+        input_failed_notice.py) is the active one."""
         radius    = 20.0
         thickness = 2.0
         pad       = 6.0   # keep the ring's own margin off the screen edge
@@ -664,7 +701,7 @@ class DX11Overlay:
         cx = self._sw - self._MARGIN - radius - pad
         cy = self._MARGIN + radius + pad
 
-        fg = _WHITE
+        fg = _COLOR_MAP["red"] if self._input_failed else _WHITE
         bg = _BLACK
 
         # Power-symbol ring: small gap centered on straight-up, plus a short
@@ -692,6 +729,18 @@ class DX11Overlay:
 
         r.draw_text(text, tx + 1, ty + 1, bg, font_size=font_size, font_face="Segoe UI")
         r.draw_text(text, tx,     ty,     fg, font_size=font_size, font_face="Segoe UI")
+
+        # "Input Failed" label, centered under the badge — only drawn once
+        # input has actually failed (see set_input_failed()).
+        if self._input_failed:
+            fail_text = "Input Failed"
+            fail_size = 10
+            fw, fh = r.measure_text(fail_text, font_size=fail_size, font_face="Segoe UI")
+            fx = cx - fw * 0.5
+            fy = cy + radius + pad + 2.0
+
+            r.draw_text(fail_text, fx + 1, fy + 1, bg, font_size=fail_size, font_face="Segoe UI")
+            r.draw_text(fail_text, fx,     fy,     fg, font_size=fail_size, font_face="Segoe UI")
 
     # ------------------------------------------------------------------
     # Stats HUD

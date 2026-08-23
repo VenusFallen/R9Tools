@@ -19,6 +19,7 @@ import theme
 from theme import (PANEL_W, TOPBAR_H, TOPBAR_MARGIN_TOP, TOPBAR_MARGIN_SIDE,
                    TOPBAR_MARGIN_BOTTOM, TOPBAR_RADIUS)
 
+import device_watch
 from panels.recoil    import RecoilPanel
 from panels.overlay   import OverlayPanel
 from panels.remapper  import RemapperPanel
@@ -79,6 +80,41 @@ class _DisplayChangeFilter(QAbstractNativeEventFilter):
 
 
 # ---------------------------------------------------------------------------
+# Device-disable/reconnect watcher
+# ---------------------------------------------------------------------------
+
+class _DeviceChangeFilter(QAbstractNativeEventFilter):
+    """Watches raw Win32 messages for WM_DEVICECHANGE and feeds parsed
+    arrival/removal events into a device_watch.DeviceFailureWatcher.
+
+    Mirrors _DisplayChangeFilter above exactly — same rationale: this app
+    already has a live Qt message pump via _TopBarWindow, so hooking the
+    raw message through nativeEventFilter() is preferred over spinning up
+    a separate ctypes message-only window/thread (which is only needed for
+    a standalone script with no Qt event loop to hook into)."""
+
+    def __init__(self, watcher: "device_watch.DeviceFailureWatcher"):
+        super().__init__()
+        self._watcher = watcher
+
+    def nativeEventFilter(self, eventType, message):
+        if eventType in (b"windows_generic_MSG", "windows_generic_MSG"):
+            try:
+                msg = wintypes.MSG.from_address(int(message))
+            except (ValueError, TypeError, OSError):
+                return False, 0
+            if msg.message == device_watch.WM_DEVICECHANGE:
+                parsed = device_watch.parse_device_change(msg.wParam, msg.lParam)
+                if parsed is not None:
+                    kind, instance_id = parsed
+                    if kind == "removal":
+                        self._watcher.handle_removal(instance_id)
+                    else:
+                        self._watcher.handle_arrival(instance_id)
+        return False, 0
+
+
+# ---------------------------------------------------------------------------
 # Topbar window
 # ---------------------------------------------------------------------------
 
@@ -125,6 +161,28 @@ class _TopBarWindow(QWidget):
         # sufficient (no risk of double-installing across multiple windows).
         self._displayFilter = _DisplayChangeFilter(self._onDisplayChange)
         QApplication.instance().installNativeEventFilter(self._displayFilter)
+
+        # Device-disable/reconnect detection (see device_watch.py). Default
+        # no-op callbacks — main.py supplies the real ones post-construction
+        # via setDeviceFailureCallbacks()/PanelWindow, same "wire it all up
+        # in main.py" convention as every other bridge/engine callback in
+        # this app. registerDeviceNotificationW needs a real HWND, which
+        # winId() forces creation of even before this window is ever shown.
+        self._onDeviceFailedCb    = lambda ids: None
+        self._onDeviceRecoveredCb = lambda ids: None
+        self._deviceWatcher = device_watch.DeviceFailureWatcher(
+            on_failed_batch=lambda ids: self._onDeviceFailedCb(ids),
+            on_recovered=lambda ids: self._onDeviceRecoveredCb(ids),
+        )
+        self._deviceHandles = device_watch.register_device_notifications(int(self.winId()))
+        self._deviceFilter = _DeviceChangeFilter(self._deviceWatcher)
+        QApplication.instance().installNativeEventFilter(self._deviceFilter)
+
+    def setDeviceFailureCallbacks(self, on_failed, on_recovered):
+        """on_failed(ids: list[str]) / on_recovered(ids: list[str]) — see
+        device_watch.DeviceFailureWatcher for exactly when/how each fires."""
+        self._onDeviceFailedCb    = on_failed
+        self._onDeviceRecoveredCb = on_recovered
 
     def _build(self):
         for label, index in [("CONTROLS", _TAB_RECOIL),
@@ -513,6 +571,17 @@ class PanelWindow(QWidget):
 
     def flashBorder(self, color: str):
         self._topBarWin.flashBorder(color)
+
+    # ------------------------------------------------------------------
+    # Device-disable/reconnect watcher (see device_watch.py) — the actual
+    # WM_DEVICECHANGE hook lives on _TopBarWindow (it owns the real HWND
+    # this app registers notifications against), passthrough kept here so
+    # main.py only has to know about PanelWindow, matching every other
+    # engine-callback wiring call it makes.
+    # ------------------------------------------------------------------
+
+    def setDeviceFailureCallbacks(self, on_failed, on_recovered):
+        self._topBarWin.setDeviceFailureCallbacks(on_failed, on_recovered)
 
     # ------------------------------------------------------------------
     # Show / hide (called from bridge via toggleOverlay slot)

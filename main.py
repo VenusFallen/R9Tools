@@ -118,6 +118,7 @@ from bridge       import UIBridge
 from dx11_overlay import DX11Overlay
 from stats_poller import StatsPoller
 from panel_window import PanelWindow
+from input_failed_notice import InputFailedNotice
 
 # Delay (ms) after the Qt event loop starts before the automatic
 # update-check runs, so it never competes with driver init / engine start /
@@ -261,6 +262,54 @@ def main():
 
     panel_win = PanelWindow(cfg, profileData, engine, macro_engine, onSettingsChanged)
 
+    # Independent top-level window (not nested in panel_win's widget tree —
+    # panel_win starts hidden and this must be able to appear on its own,
+    # see input_failed_notice.py). Kept alive via this local reference for
+    # the lifetime of main() (i.e. until app.exec() returns).
+    input_failed_notice = InputFailedNotice(bridge)
+
+    # Combined "is input currently failed" state, feeding dx_overlay's
+    # single red-badge bool. Two independent sources:
+    #   - old path (recoil.py's I/O-exception counter, via
+    #     bridge.inputEngineFailed): sticky for the whole session, no known
+    #     recovery — see _onOldPathFailed below.
+    #   - new path (device_watch.py's WM_DEVICECHANGE detection, via
+    #     bridge.deviceInputFailed/deviceInputRecovered): tracks the
+    #     currently-failed device instance ID list, can grow/shrink/empty
+    #     out again over the session as devices fail and recover.
+    # Both mutations below only ever happen on the Qt main thread (bridge
+    # QueuedConnection slots, and nativeEventFilter-originated direct calls
+    # from panel_win are already main-thread) — no lock needed.
+    _input_fail_state = {"old": False, "devices": []}
+
+    def _recomputeBadge():
+        dx_overlay.set_input_failed(
+            _input_fail_state["old"] or bool(_input_fail_state["devices"]))
+
+    def _onOldPathFailed():
+        _input_fail_state["old"] = True
+        _recomputeBadge()
+
+    def _onDeviceInputFailed(ids):
+        _input_fail_state["devices"] = list(ids)
+        _recomputeBadge()
+        bridge.deviceInputFailed.emit(list(ids))
+
+    def _onDeviceInputRecovered(ids):
+        _input_fail_state["devices"] = list(ids)
+        _recomputeBadge()
+        bridge.deviceInputRecovered.emit(list(ids))
+
+    # panel_win owns the real HWND device-change notifications are
+    # registered against (see panel_window.py's _TopBarWindow /
+    # device_watch.py) — these callbacks run directly on the Qt main
+    # thread (nativeEventFilter), no signal/queueing needed for
+    # thread-safety, but deviceInputFailed/deviceInputRecovered are still
+    # re-emitted as bridge Signals above so input_failed_notice.py stays
+    # decoupled from panel_window internals, same as every other
+    # UI-facing notification in this app.
+    panel_win.setDeviceFailureCallbacks(_onDeviceInputFailed, _onDeviceInputRecovered)
+
     # Bridge → UI
     bridge.overlayToggled.connect(panel_win.toggleOverlay)
     bridge.recoilToggled.connect(panel_win.onRecoilToggled)
@@ -274,6 +323,19 @@ def main():
     bridge.statsUpdated.connect(dx_overlay.update_stats)
     bridge.quitRequested.connect(app.quit)
     bridge.updateAvailable.connect(lambda latest: _onUpdateAvailable(latest, panel_win))
+    # inputEngineFailed (old path) is auto-queued onto the main thread by
+    # PySide6 (emitted from the engine's listen thread below) — safe to
+    # mutate _input_fail_state / touch dx_overlay / touch widgets here.
+    bridge.inputEngineFailed.connect(_onOldPathFailed)
+    bridge.inputEngineFailed.connect(input_failed_notice.trigger)
+    # New path (device_watch.py) — see input_failed_notice.py for exactly
+    # how "old" vs "device" mode is unified into one shared popup.
+    bridge.deviceInputFailed.connect(input_failed_notice.triggerDevices)
+    bridge.deviceInputRecovered.connect(input_failed_notice.recoverDevices)
+    # Emitted from InputFailedNotice's background PnP reconnect thread —
+    # this one genuinely needs the QueuedConnection, since it originates
+    # off the Qt main thread.
+    bridge.reconnectAttemptFinished.connect(input_failed_notice.reconnectFinished)
 
     # Engine → bridge (interception thread calls these directly)
     engine.setOverlayCallback(bridge.overlayToggled.emit)
@@ -281,20 +343,31 @@ def main():
     engine.setStrengthCallback(bridge.strengthChanged.emit)
     engine.setQuitCallback(bridge.quitRequested.emit)
     # No hotkeys/remaps/macros/mouse-forwarding work at all if this fires —
-    # see RecoilEngine._bringUpInterception(). Already logged critically from
-    # the listen thread itself; this is just an additional, guaranteed-to-run
-    # main-thread breadcrumb in case logging setup itself is degraded.
-    # TODO(ui-agent): consider a dedicated bridge Signal + DX11 overlay
-    # "input engine failed" indicator here rather than only a log line —
-    # left as a follow-up, this callback hook is the wiring point for it.
-    engine.setInputFailedCallback(
-        lambda: logging.critical(
+    # see RecoilEngine._bringUpInterception(). Fires exactly once, whether
+    # from the startup bring-up failure path or the mid-session detection
+    # path, and is called from the engine's background listen thread — not
+    # the Qt main thread — so anything UI-facing goes through the bridge
+    # Signal (auto-queued onto the main thread), same as every other
+    # cross-thread callback in this app; see bridge.py.
+    #
+    # logging.critical() is kept as-is alongside the new signal emission —
+    # it's a guaranteed-to-run main-thread-independent breadcrumb in case
+    # logging setup itself is degraded, and predates the signal below.
+    #
+    # The red "Input Failed" badge state (dx_overlay.set_input_failed, via
+    # _onOldPathFailed/_recomputeBadge above) and the non-modal notice/quit
+    # flow (input_failed_notice.py) are both connected to
+    # bridge.inputEngineFailed above.
+    def _onInputEngineFailed():
+        logging.critical(
             "R9Tools input engine failed to start — the app is running but "
             "no hotkeys, remaps, macros, or recoil compensation will work "
             "this session. See earlier log entries for the Interception "
             "driver bring-up failure."
         )
-    )
+        bridge.inputEngineFailed.emit()
+
+    engine.setInputFailedCallback(_onInputEngineFailed)
 
     # StatsPoller → bridge (poller thread → main thread via QueuedConnection)
     stats_poller.setCallback(bridge.statsUpdated.emit)

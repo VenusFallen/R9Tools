@@ -138,11 +138,30 @@ class RecoilEngine:
         self._quitCallback        = None
         self._inputFailedCallback = None
         self.inputEngineFailed    = False  # True once _listenLoop gives up bringing
-                                            # up the Interception driver context — see
-                                            # _bringUpInterception(). UI layer may poll
-                                            # this / hook setInputFailedCallback() to
-                                            # surface a visible "input engine failed"
-                                            # indicator; not wired to any UI here.
+                                            # up the Interception driver context (see
+                                            # _bringUpInterception()) OR once the
+                                            # driver's device I/O (await_input/
+                                            # receive/send) has failed
+                                            # _INTERCEPTION_IO_FAILURE_THRESHOLD times
+                                            # in a row mid-session — see
+                                            # _onInterceptionIoFailure(). UI layer may
+                                            # poll this / hook setInputFailedCallback()
+                                            # to surface a visible "input engine
+                                            # failed" indicator; not wired to any UI
+                                            # here.
+        self._consecutiveIoFailures = 0    # consecutive failures of the actual
+                                            # device I/O calls inside _listenLoop
+                                            # (await_input/receive/send) — reset to 0
+                                            # on any successful I/O call (including a
+                                            # clean await_input timeout with no
+                                            # input, which is normal idle behavior).
+                                            # Deliberately does NOT count exceptions
+                                            # raised by our own stroke-handling code
+                                            # (_handleMouseStroke/
+                                            # _handleKeyboardStroke/macro engine) —
+                                            # see _onInterceptionIoFailure() and the
+                                            # dedicated try/except blocks around each
+                                            # I/O call in _listenLoop.
         self._hotkeysSuspended    = False
         self._strengthHoldEvents: dict = {}   # "down"/"up" → threading.Event
         self._remapActive: dict = {}           # sig tuple → to_input dict
@@ -551,6 +570,20 @@ class RecoilEngine:
     _INTERCEPTION_BRINGUP_BASE_DELAY = 0.05  # seconds, doubles each retry up to a cap
     _INTERCEPTION_BRINGUP_MAX_DELAY = 0.5
 
+    # Consecutive-failure budget for the driver's device I/O calls
+    # (await_input/receive/send) once the listen loop is already up and
+    # running — this is the mid-session counterpart to
+    # _INTERCEPTION_BRINGUP_ATTEMPTS above, detecting the driver dying
+    # *after* a successful startup (e.g. its service getting killed/crashing
+    # while R9Tools is already running) rather than failing to come up in
+    # the first place. The loop polls at a ~100ms cadence (see the
+    # await_input(100) timeout below), so 50 consecutive failures is
+    # roughly 5 seconds of sustained, unbroken I/O failure — long enough
+    # that a single transient hiccup (one bad call) can't false-positive
+    # this, but short enough to warn the user reasonably promptly that a
+    # restart is needed. Tune here if that balance needs adjusting.
+    _INTERCEPTION_IO_FAILURE_THRESHOLD = 50
+
     def _bringUpInterception(self):
         """Construct an interception.Interception() context and apply the
         keyboard/mouse filters, retrying with backoff on failure.
@@ -630,6 +663,45 @@ class RecoilEngine:
         )
         return None
 
+    def _onInterceptionIoFailure(self) -> None:
+        """Record one failed call to the driver's actual device I/O
+        (await_input/receive/send) and, once _INTERCEPTION_IO_FAILURE_
+        THRESHOLD consecutive failures have been seen, mark the input
+        engine failed and fire the same setInputFailedCallback() hook the
+        startup bring-up-failure path already uses.
+
+        Deliberately narrow: only the three call sites listed above invoke
+        this. A bug in our own stroke-handling logic (_handleMouseStroke /
+        _handleKeyboardStroke / macro engine) raises inside the outer
+        per-iteration try/except in _listenLoop same as before, gets
+        logged, and does NOT reach here — that's a software bug in this
+        app, not evidence the Interception driver itself has died, and
+        must not be misreported to the user as "restart your PC".
+
+        Guarded to fire the callback exactly once per failure transition:
+        once self.inputEngineFailed is already True, further calls here
+        are no-ops (still tracked via the counter, but no repeat firing).
+        """
+        self._consecutiveIoFailures += 1
+        if (self._consecutiveIoFailures < self._INTERCEPTION_IO_FAILURE_THRESHOLD
+                or self.inputEngineFailed):
+            return
+
+        self.inputEngineFailed = True
+        logging.getLogger("r9tools.recoil").critical(
+            "Interception device I/O failed %d consecutive times — the "
+            "driver appears to have died mid-session; input engine marked "
+            "failed.",
+            self._consecutiveIoFailures,
+        )
+        if self._inputFailedCallback:
+            try:
+                self._inputFailedCallback()
+            except Exception:
+                logging.getLogger("r9tools.recoil").exception(
+                    "inputFailedCallback raised"
+                )
+
     def _listenLoop(self):
         inter = self._bringUpInterception()
         if inter is None:
@@ -649,14 +721,37 @@ class RecoilEngine:
         try:
             while self._running:
                 try:
-                    deviceIdx = inter.await_input(100)
+                    # --- Device I/O: the only calls that count toward
+                    # _onInterceptionIoFailure()'s consecutive-failure
+                    # tracking. Each is wrapped individually (rather than
+                    # relying on the outer per-iteration except below) so
+                    # that only genuine I/O-layer exceptions are counted —
+                    # everything below "Track devices for use in
+                    # synthesis" is our own logic and must not be
+                    # misattributed to a dead driver.
+                    try:
+                        deviceIdx = inter.await_input(100)
+                    except Exception:
+                        self._onInterceptionIoFailure()
+                        raise
                     if deviceIdx is None:
+                        # Clean, expected idle timeout — normal behavior,
+                        # not a failure. Reset the streak.
+                        self._consecutiveIoFailures = 0
                         continue
 
                     if deviceIdx >= len(inter._devices):
                         continue
                     device = inter._devices[deviceIdx]
-                    stroke = device.receive()
+                    try:
+                        stroke = device.receive()
+                    except Exception:
+                        self._onInterceptionIoFailure()
+                        raise
+                    # A successful receive() (even one returning None —
+                    # nothing to process this tick) proves the I/O layer is
+                    # alive — reset the streak.
+                    self._consecutiveIoFailures = 0
                     if stroke is None:
                         continue
 
@@ -690,7 +785,11 @@ class RecoilEngine:
                         self._macroEngine.handleStroke(stroke, is_kb, is_e0)
 
                     if not suppress:
-                        device.send(stroke)
+                        try:
+                            device.send(stroke)
+                        except Exception:
+                            self._onInterceptionIoFailure()
+                            raise
                 except Exception:
                     # Never let a single bad stroke/handler bug take the whole
                     # input thread down silently (see IndexError crash this
@@ -709,6 +808,18 @@ class RecoilEngine:
                     # `self._running` (already False by the time stop() calls
                     # _destroyInterception()) and exits via the while
                     # condition on the very next iteration.
+                    #
+                    # Note: exceptions from the three I/O calls themselves
+                    # (await_input/receive/send) are re-raised by their own
+                    # dedicated try/except blocks above after being counted
+                    # in _onInterceptionIoFailure() — they still land here
+                    # and get logged same as always, this outer handler just
+                    # isn't where the counting happens. Exceptions from our
+                    # own stroke-handling logic (_handleMouseStroke/
+                    # _handleKeyboardStroke/macro engine) land here directly
+                    # and are NOT counted as I/O failures — see
+                    # _onInterceptionIoFailure()'s docstring for why that
+                    # distinction matters.
                     logging.getLogger("r9tools.recoil").exception(
                         "Unhandled error in _listenLoop iteration — continuing"
                     )

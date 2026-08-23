@@ -16,3 +16,15 @@ class UIBridge(QObject):
     statsUpdated    = Signal(dict)  # new hardware stats from StatsPoller
     quitRequested   = Signal()      # quit hotkey pressed
     updateAvailable = Signal(str)   # background auto-update check found a newer release (arg: latest version str)
+    inputEngineFailed = Signal()    # input engine (Interception) failed — startup or mid-session, fires once
+
+    # WM_DEVICECHANGE-based detection (see device_watch.py) — a second,
+    # faster, more specific path than inputEngineFailed above: it knows
+    # exactly which device(s) failed and can fire/clear more than once per
+    # session (a device can be disabled, reconnected, then disabled again).
+    # Kept fully separate from inputEngineFailed, which stays a no-arg,
+    # fires-once signal for the old I/O-exception-counter path — see
+    # input_failed_notice.py for how the two are unified in the UI.
+    deviceInputFailed        = Signal(list)  # settled batch of failed device instance IDs
+    deviceInputRecovered     = Signal(list)  # remaining failed device instance IDs (empty = fully recovered)
+    reconnectAttemptFinished = Signal()      # background Disable/Enable-PnpDevice attempt completed (no success/failure claim)
