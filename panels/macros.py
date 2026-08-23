@@ -4,7 +4,7 @@ import interception
 
 from PySide6.QtCore import Qt, Signal, Slot, QTimer
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
     QPushButton, QScrollArea, QSizePolicy, QStackedWidget,
     QVBoxLayout, QWidget, QComboBox,
 )
@@ -14,7 +14,7 @@ import keybind_conflicts
 from panels.base import Panel
 from recoil import MOUSE_BUTTON_FLAGS, scancodeLabel
 from macro_engine import MacroEngine, actionLabel
-from interception_bringup import bringUpInterception
+from interception_bringup import bringUpInterception, destroyInterception
 
 _MOUSE_DISPLAY = {
     "mouse_left":   "LMB",
@@ -599,27 +599,28 @@ class MacrosPanel(Panel):
             return
         exclude_id = f"macro_trigger:{id(self._editingMacro)}"
         conflict = keybind_conflicts.findConflict(self._settings, inp, exclude_id=exclude_id)
-        if conflict:
-            # Hard-block: discard the capture, explain why via the status
-            # label (the same label used for capture/record prompts), and
-            # immediately re-arm capture — the trigger button stays in
-            # "Press key..." capture mode instead of reverting to the
-            # macro's current trigger, so the user can just press another
-            # key without clicking the button again.
-            self._trigBtn.setText("Press key...")
-            self._trigBtn.setStyleSheet(f"color: {theme.ACTIVE_FG};")
-            self._statusLabel.setText(f"Already bound to {conflict}. Try again.")
-            self._statusLabel.setStyleSheet(
-                f"color: #ff6666; font: italic 9pt 'Segoe UI';"
-                f" padding: 0px 10px 2px 10px;")
-            self._statusLabel.setVisible(True)
-            self._startCapture("", self._onTriggerCaptured, keyboard_only=False)
-            QTimer.singleShot(2200, self._resetStatusLabel)
+        if conflict and not self._confirmConflict(_triggerLabel(inp), conflict):
+            # Declined — leave the macro's current trigger untouched.
+            self._trigBtn.setText(_triggerLabel(self._editingMacro.get("trigger", {})))
+            self._trigBtn.setStyleSheet("")
             return
         self._editingMacro["trigger"] = inp
         self._trigBtn.setText(_triggerLabel(inp))
         self._trigBtn.setStyleSheet("")
         self._onSettingsChanged(self._settings)
+
+    def _confirmConflict(self, new_label: str, conflict_with: str) -> bool:
+        """A captured binding collides with an existing one — warn the
+        user which binding it's already used for and let them choose
+        whether to keep it anyway. Returns True to keep/commit the new
+        binding, False to discard it."""
+        return QMessageBox.question(
+            self, "Keybind already in use",
+            f"{new_label} is already used for {conflict_with}.\n\n"
+            f"Use it here anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes
 
     def _resetStatusLabel(self):
         self._statusLabel.setVisible(False)
@@ -647,6 +648,7 @@ class MacrosPanel(Panel):
     def _captureThread(self, keyboard_only: bool, mouse_only: bool):
         result = None
         failed = False
+        inter = None
         try:
             def _configure(i):
                 i.set_filter(i.is_keyboard, interception.FilterKeyFlag.FILTER_KEY_ALL)
@@ -685,6 +687,7 @@ class MacrosPanel(Panel):
                                 break
         finally:
             self._capturing = False
+            destroyInterception(inter)
 
         self._captureFailed = failed
         self._captureResult = result  # None: user's callbacks already treat this as a no-op

@@ -90,10 +90,19 @@ def main():
     # Blocking render loop — returns when user quits
     app.run()
 
+    # engine.stop() destroys RecoilEngine's own Interception context
+    # (closing its open, filtered keyboard/mouse device handles) as the
+    # first thing it does, before joining its threads — see
+    # RecoilEngine.stop()/_destroyInterception() in recoil.py. That is what
+    # releases system-wide input on quit now; the driver SERVICE
+    # deliberately stays loaded/running across app sessions (matches the
+    # PySide6 stack's main.py — see its _INTERCEPTION_SERVICES comment),
+    # since Interception is a no-op passthrough at the driver level once
+    # this process's device handles are closed. There is deliberately no
+    # `_interception_driver(start=False)` call here anymore.
     engine.stop()
     macro_engine.stop()
     stats_poller.stop()
-    _interception_driver(start=False)
 
 
 def _make_on_changed(engine, macro_engine, stats_poller):

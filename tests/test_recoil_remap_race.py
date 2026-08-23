@@ -43,11 +43,32 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import interception
 from recoil import RecoilEngine
 
 _FROM_KEY = {"type": "key", "code": 30, "e0": False}   # scancode 30 = 'A'
 _TO_KEY   = {"type": "key", "code": 48, "e0": False}   # scancode 48 = 'B'
 _SIG      = ("key", _FROM_KEY["code"], _FROM_KEY["e0"])
+
+
+class _FakeDevice:
+    """Stand-in for the interception device object RecoilEngine caches as
+    self._kbDevice/self._msDevice. Records every stroke sent to it instead
+    of touching the OS."""
+    def __init__(self):
+        self.sent = []
+
+    def send(self, stroke):
+        self.sent.append(stroke)
+
+
+class _FakeThread:
+    """Stand-in for RecoilEngine's own background threads so stop() can be
+    exercised directly without ever calling start() (which would spin up a
+    real listen loop trying to bring up the Interception driver) — join()
+    on a thread that was never started raises RuntimeError otherwise."""
+    def join(self, timeout=None):
+        pass
 
 
 def _base_settings():
@@ -185,6 +206,50 @@ class TestRecoilRemapRace(unittest.TestCase):
 
         self.assertEqual(eng._remapPendingRelease, set())
         self.assertFalse(eng._tryRemap(_SIG, True, None))
+
+
+class TestStuckRemapCleanupOnStop(unittest.TestCase):
+    """Regression test for the equivalent stuck-key gap on the remap side:
+    if a remapped-FROM key is still physically held (i.e. its synthesized-TO
+    output was sent down but never up) at the instant the app quits, stop()
+    must force-release the synthesized-TO input before tearing down the
+    Interception context, mirroring _forceReleaseActiveToggles_locked's
+    existing stop()-time cleanup for toggles."""
+
+    def test_stop_force_releases_active_remap(self):
+        eng = RecoilEngine(_base_settings())
+        eng._applyThread  = _FakeThread()
+        eng._listenThread = _FakeThread()
+        eng._rfThread     = _FakeThread()
+        eng._kbDevice = _FakeDevice()
+        eng._msDevice = _FakeDevice()
+
+        self.assertTrue(eng._tryRemap(_SIG, False, None))  # physical down
+        self.assertIn(_SIG, eng._remapActive)
+
+        eng.stop()
+
+        self.assertEqual(eng._remapActive, {})
+        sent = eng._kbDevice.sent
+        # sent[0] is the down-stroke synthesized by the earlier _tryRemap()
+        # call above; stop() must append exactly one more (the release).
+        self.assertEqual(len(sent), 2)
+        self.assertTrue(sent[-1].flags & interception.KeyFlag.KEY_UP)
+        self.assertEqual(sent[-1].code, _TO_KEY["code"])
+
+    def test_stop_is_a_no_op_when_no_remap_is_active(self):
+        eng = RecoilEngine(_base_settings())
+        eng._applyThread  = _FakeThread()
+        eng._listenThread = _FakeThread()
+        eng._rfThread     = _FakeThread()
+        eng._kbDevice = _FakeDevice()
+        eng._msDevice = _FakeDevice()
+
+        eng.stop()  # must not raise
+
+        self.assertEqual(eng._remapActive, {})
+        self.assertEqual(eng._kbDevice.sent, [])
+        self.assertEqual(eng._msDevice.sent, [])
 
 
 if __name__ == "__main__":

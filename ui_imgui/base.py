@@ -13,7 +13,7 @@ import time
 import interception as _ic
 
 from recoil import MOUSE_BUTTON_FLAGS, _SCROLL_WHEEL_FLAG, scancodeLabel
-from interception_bringup import bringUpInterception
+from interception_bringup import bringUpInterception, destroyInterception
 
 _MOUSE_DISPLAY = {
     "mouse_left":   "LMB",
@@ -161,6 +161,7 @@ class CaptureHelper:
         self._thread.start()
 
     def _run(self):
+        inter = None
         try:
             def _configure(i):
                 i.set_filter(i.is_keyboard, _ic.FilterKeyFlag.FILTER_KEY_ALL)
@@ -214,6 +215,7 @@ class CaptureHelper:
                         break
         finally:
             self._capturing = False
+            destroyInterception(inter)
             if self._on_suspend:
                 self._on_suspend(False)
             self._event.set()

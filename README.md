@@ -6,7 +6,11 @@ A personal gaming accessibility toolkit for Windows. Built with hardware-level i
 
 ## Modules
 
-### Recoil Compensation
+### Controls
+
+The **Controls** tab is home to Recoil Compensation, Rapid Fire, and Toggles. They're independent features that just happen to share one panel tab — enabling or configuring one has no effect on the others.
+
+#### Recoil Compensation
 
 Applies a configurable downward mouse pull while a trigger key combo is held, compensating for weapon recoil.
 
@@ -17,9 +21,7 @@ Applies a configurable downward mouse pull while a trigger key combo is held, co
 - Trigger key and all hotkeys are rebindable from the Settings tab
 - When a **Window Filter** is set in Settings, recoil compensation only fires while that window has focus
 
----
-
-### Rapid Fire
+#### Rapid Fire
 
 Automatically re-fires a held trigger button at a configurable interval, simulating rapid repeated clicks.
 
@@ -28,6 +30,16 @@ Automatically re-fires a held trigger button at a configurable interval, simulat
 - Adjustable interval in milliseconds
 - **Humanize** adds random timing jitter to each click
 - Enabled checkbox always defaults to off on startup and profile load
+- When a **Window Filter** is set in Settings, Rapid Fire only fires while that window has focus
+
+#### Toggles
+
+Converts any key or mouse button's native hold behavior into a toggle: press it once and it stays "held" until you press it again, instead of only being held for as long as you physically hold it down. Useful for games that don't natively support toggle-sprint, toggle-crouch, toggle-ADS, and similar options — bind the toggle to whatever key the game expects for that action.
+
+- Add any number of toggles, each bound to its own key or mouse button (scroll wheel directions can't be used for a toggle binding)
+- **Name each toggle** for your own reference (e.g. "Sprint", "Crouch") — this is purely a label and has no effect on behavior
+- Per-toggle enable switch — disable individual toggles without deleting them
+- When a **Window Filter** is set in Settings, a toggle only responds while that window has focus
 
 ---
 
@@ -46,6 +58,7 @@ Record and play back sequences of keyboard and mouse actions, triggered by any k
 - Per-macro enable toggle — disable individual macros without deleting them
 - **Test** button fires the macro immediately from the editor
 - Macros are saved per-profile
+- When a **Window Filter** is set in Settings, macro triggers only fire while that window has focus
 
 ---
 
@@ -55,8 +68,7 @@ Remap any keyboard key or mouse button to any other keyboard key, mouse button, 
 
 - Multiple mappings can be active simultaneously
 - **Enabled checkbox** always defaults to off on startup and on profile load, regardless of saved state
-- Protected hotkeys (Menu Toggle, Quit) cannot be used as remap sources
-- **Conflict prevention** — you can't bind the same key or button to two different things at once. If you try to capture a key that's already used elsewhere (a hotkey, a Recoil/Rapid Fire trigger or slot key, another remap, or a macro trigger), the capture is rejected and you're told what it's already bound to. You can immediately try a different key — no need to restart the binding process.
+- Protected hotkeys (Menu Toggle, Quit) can never be used as a remap source — see [Keybind Conflicts](#keybind-conflicts) below
 - **Remapped input also triggers other modules** — if you remap a key (say `1`) to `mouse_left`, that remap not only makes the game see a left-click, it also counts as `mouse_left` for R9Tools's own purposes. Any Recoil, Rapid Fire, or Macro trigger configured to fire on `mouse_left` will now also respond when you press `1`. This is a real capability (chain a remap into other modules) but also worth knowing if you have overlapping bindings, since it means remapped keys are no longer "invisible" to the rest of R9Tools.
 
 When a **Window Filter** is set in Settings, remapping only fires while that window has focus. If the filter is left blank, remapping is always active when enabled.
@@ -123,7 +135,7 @@ Save, load, and delete named configurations. All module settings are stored per-
 - Select a profile from the dropdown, then click **Apply** to load it
 - Use **Save** next to the dropdown to overwrite the current profile, or enter a new name and click **Save** to create one
 - A protected **Default** profile is always available and cannot be deleted or overwritten
-- Loading a profile always starts with recoil, crosshair, remapper, rapid fire, stats, and all macros disabled
+- Loading a profile always starts with recoil, crosshair, module indicators, remapper, rapid fire, stats, and all macros and toggles disabled — the R9 Running Indicator and the "Automatically check for updates" setting are the only exceptions, since forcing those off on every profile load would defeat their purpose
 - The top bar flashes to confirm saves (green), loads (blue), and deletes (red)
 
 ---
@@ -132,7 +144,7 @@ Save, load, and delete named configurations. All module settings are stored per-
 
 Program-wide configuration accessible from the right side of the top bar.
 
-**Window Filter** — select a process name (e.g. `game.exe`) from the running process list. When set, Recoil Compensation, the Crosshair, the Module Indicators, and the Button Remapper will only be active while that window has focus. Refresh the list with the ↻ button. Leave blank to have all modules act globally.
+**Window Filter** — select a process name (e.g. `game.exe`) from the running process list. When set, most modules (Recoil Compensation, Rapid Fire, Toggles, Macros, the Crosshair, the Module Indicators, and the Button Remapper) will only be active while that window has focus — see [Window Filter](#window-filter) below for the full breakdown. Refresh the list with the ↻ button. Leave blank to have all modules act globally.
 
 **Color Theme** — switch between Dark and Light themes. The selection is saved per-profile.
 
@@ -150,7 +162,9 @@ Program-wide configuration accessible from the right side of the top bar.
 
 **Updates** — check for and apply updates from within the app:
 
-- **R9Tools** — checks the GitHub releases page for a newer version of the executable. Downloads and replaces the running exe; restart to apply.
+- **R9Tools** — click **Check** to look for a newer release, **Update** to download it, then **Install** to apply it. Installing re-runs the same installer used for a fresh install, silently in the background (so your driver setup and shortcuts stay intact), and R9Tools closes itself once that kicks off — just relaunch it when you're ready.
+- **Automatically check for updates** — on by default; checks for a newer release once on launch and prompts you to update immediately if one's found. Choosing "Later" skips it for that session without turning the setting off.
+- A **View releases on GitHub** link is always available in the Updates section if you'd rather download and install a release manually.
 
 > Updates only work in the packaged `.exe` build. Running from source requires manual updates.
 >
@@ -174,11 +188,24 @@ Program-wide configuration accessible from the right side of the top bar.
 The Window Filter in the Settings tab restricts active modules to a specific game process:
 
 - **Recoil Compensation** — pull only fires while the filtered window has focus
+- **Rapid Fire** — fire loop only actually clicks while the filtered window has focus
+- **Toggles** — a toggle binding only responds while the filtered window has focus
+- **Macros** — trigger detection only fires while the filtered window has focus
 - **Crosshair** — only renders while the filtered window has focus; hides automatically when you alt-tab
 - **Module Indicators** — only renders while the filtered window has focus, just like the Crosshair
 - **Button Remapper** — remap rules only fire while the filtered window has focus
 
+The Stats Overlay and the R9 Running Indicator are the exceptions — they always track real OS focus/state directly and are never scoped by the Window Filter.
+
 Leave the Window Filter **blank** to have these modules operate globally with no window restriction. The filter is saved per-profile, so each game profile can point to its own process.
+
+---
+
+## Keybind Conflicts
+
+R9Tools lets you bind the same physical key or button to more than one thing if you actually want to — for example, LMB armed for both Rapid Fire and Recoil Compensation. Whenever you capture a key or button that's already used elsewhere in the app — a hotkey, a Recoil/Rapid Fire trigger or slot key, a Button Remapper source, a macro trigger, or a Toggle — you'll get a prompt telling you what it's already bound to and asking whether to use it here anyway. Choose **No** (or dismiss the prompt) and the capture is discarded so you can try a different key; choose **Yes** and both bindings become active on that key.
+
+> **One permanent exception:** the **Menu Toggle** and **Quit** hotkeys can never be reassigned to a Button Remapper source or a Toggle binding, confirmation or not. They're your guaranteed way back out of the app, so R9Tools always keeps them free of anything that could remap or convert them into something else. They can still be used as a Recoil/Rapid Fire trigger, slot key, or macro trigger like any other binding — the hard protection only applies to the remapper and Toggles.
 
 ---
 
@@ -219,7 +246,7 @@ The Stats Overlay works out of the box — LibreHardwareMonitor's DLLs are bundl
 2. Clone or download the repository
 3. Install Python dependencies:
 
-```bashab
+```bash
 pip install PySide6 interception-python psutil pywin32 pythonnet
 ```
 
@@ -237,9 +264,9 @@ python main.py
 
 ## Notes
 
-- **`psutil` and `pywin32`** are required for the Window Filter feature (used by both Crosshair and Button Remapper). Both modules will still function without them, but window-specific filtering will be unavailable.
+- **`psutil` and `pywin32`** are required for the Window Filter feature (used by Recoil Compensation, Rapid Fire, Toggles, Macros, the Crosshair, the Module Indicators, and the Button Remapper — see [Window Filter](#window-filter) above). Every affected module still functions without these packages, but window-specific filtering will be unavailable and they'll act globally instead.
 - **`pythonnet`** is required for the Stats Overlay. If not installed, the Stats panel will show a notice and no data will be displayed. Not needed for any other feature.
-- **Interception driver lifecycle** — R9Tools automatically starts the Interception kernel driver (`keyboard_filter`, `mouse_filter`) on launch and stops it on clean exit. This means the driver is only loaded while the program is running, reducing its footprint when R9Tools is not in use. If the process is force-killed (e.g. via Task Manager), the driver will remain loaded until the next clean launch.
+- **Interception driver lifecycle** — R9Tools uses the Interception kernel driver for hardware-level input capture. Once installed, its driver service stays loaded at the Windows level for the rest of your session (even after you close R9Tools) — this has no effect on the rest of your system, since the driver only does anything while R9Tools actually has it open. Real input capture starts the moment R9Tools launches and releases immediately when you quit, so closing the app is fast and no longer causes the brief system-wide keyboard/mouse freeze that older versions could produce.
 - **Anti-cheat compatibility** — R9Tools is **not compatible** with games protected by kernel-level anti-cheat (Easy Anti-Cheat, BattlEye). The Interception driver is a kernel filter driver and will be visible to these systems. Do not run R9Tools alongside games that use kernel anti-cheat. VAC (Steam) is userspace-only and is generally unaffected.
 - **Antivirus false positives** — Windows Defender and other AV tools may flag this application due to the Interception kernel driver. The driver operates at the kernel level for input filtering only; this is a known false positive for Interception-based tools. You can submit the driver for analysis at [Microsoft's security portal](https://www.microsoft.com/en-us/wdsi/filesubmission) if needed.
 - **Antivirus false positives** may also flag the pre-built EXE for the same reason as the driver.

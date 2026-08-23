@@ -141,6 +141,13 @@ _DEFAULT_SETTINGS = {
         "enabled": True,
     },
     "macros": [],
+    # "Hold-to-toggle" list — converts a key/mouse-button's native hold
+    # behavior into press-once-to-toggle (logically held until pressed
+    # again). Flat list of independent entries, sibling to macros, not
+    # nested under recoil/rapidfire since it isn't weapon/RF-specific. See
+    # recoil.py's RecoilEngine._lookupToggleTarget/_tryToggleDown for the
+    # matching/state-machine implementation.
+    "toggles": [],
     "stats": {
         "enabled":        False,
         "corner":         "top_right",
@@ -294,6 +301,34 @@ def _sanitize_profile(profile: dict) -> None:
         clean_macros.append(macro)
     profile["macros"] = clean_macros
 
+    # Toggles ("hold-to-toggle" list)
+    if not isinstance(profile.get("toggles"), list):
+        profile["toggles"] = []
+    clean_toggles = []
+    for tog in profile["toggles"]:
+        if not isinstance(tog, dict):
+            continue
+        tog["name"]    = str(tog.get("name", ""))[:64]
+        tog["enabled"] = bool(tog.get("enabled", True))
+        if tog.get("type") == "mouse":
+            if tog.get("button") not in _VALID_MOUSE_BUTTONS:
+                continue
+            tog.pop("code", None)
+            tog.pop("e0", None)
+        elif tog.get("type") == "key":
+            code = tog.get("code", 0)
+            if not isinstance(code, int) or not (0 <= code <= 255):
+                continue
+            tog["e0"] = bool(tog.get("e0", False))
+            tog.pop("button", None)
+        else:
+            # "scroll" (toggling an instantaneous scroll tick doesn't make
+            # sense) or any malformed/unrecognized type — drop the entry
+            # rather than let it reach the engine in an ambiguous shape.
+            continue
+        clean_toggles.append(tog)
+    profile["toggles"] = clean_toggles
+
 
 def load() -> dict:
     _migrate_old_profiles_file_if_needed()
@@ -401,6 +436,10 @@ def load() -> dict:
         # Migrate macros (new in V0.4.0 — backfill empty list)
         profile.setdefault("macros", [])
 
+        # Migrate toggles (new — "hold-to-toggle" list; backfill empty list
+        # for profiles.json entries that predate this feature)
+        profile.setdefault("toggles", [])
+
         # Migrate stats (new in V0.5.0 — backfill defaults)
         profile.setdefault("stats", copy.deepcopy(_DEFAULT_SETTINGS["stats"]))
         st = profile["stats"]
@@ -451,6 +490,17 @@ def loadProfile(data: dict, name: str) -> dict | None:
     settings.setdefault("macros", [])
     for macro in settings["macros"]:
         macro["enabled"] = False
+    # Toggles are force-disabled on profile load too, same rationale as
+    # macros above — a toggle bound for one game shouldn't silently carry
+    # over active into a different profile/game without an explicit
+    # re-enable. (RecoilEngine's own updateSettings(full_reset=True) path,
+    # invoked separately by the profile-switch caller, is what forces the
+    # release of any toggle that was actively ON at switch time — this
+    # setting-level disable just prevents it from being re-armed afterward
+    # until the user opts back in.)
+    settings.setdefault("toggles", [])
+    for tog in settings["toggles"]:
+        tog["enabled"] = False
     save(data)
     return settings
 

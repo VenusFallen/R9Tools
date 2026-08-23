@@ -3,6 +3,11 @@ __pycache__/
 *.py[cod]
 *.pyo
 
+# pytest cache (auto-generated when running the test suite; currently kept out
+# of git only via pytest's own auto-generated .gitignore inside this folder —
+# listed explicitly here too so it stays ignored even if that ever changes)
+.pytest_cache/
+
 # Virtual environments
 .venv/
 venv/
