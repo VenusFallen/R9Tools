@@ -75,6 +75,16 @@ def get_log_path() -> str:
     return os.path.join(_default_log_dir(), _LOG_FILE_NAME)
 
 
+def get_log_dir() -> str:
+    """Return the log directory (``%LOCALAPPDATA%\\R9Tools\\logs`` or its
+    fallback — see _default_log_dir()) without creating it. Public wrapper
+    around _default_log_dir() so other modules (e.g. updater.py, to place
+    an Inno Setup /LOG= install log alongside the app's own log) have one
+    canonical place to ask "where do R9Tools logs live" instead of
+    duplicating the %LOCALAPPDATA% fallback chain."""
+    return _default_log_dir()
+
+
 def _install_excepthook():
     previous_hook = sys.excepthook
 

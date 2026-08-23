@@ -2,6 +2,8 @@
 R9Tools - Gaming Accessibility Toolkit
 Run as administrator (required for Interception driver).
 """
+import ctypes
+import ctypes.wintypes as wintypes
 import logging
 import sys
 import subprocess
@@ -11,6 +13,67 @@ from PySide6.QtCore import qInstallMessageHandler, QtMsgType, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from crash_logging import setup_logging
+
+# Named Win32 mutex this process creates and holds for its entire lifetime,
+# purely so R9Tools.iss's `AppMutex=R9Tools_AppMutex` (paired with
+# `CloseApplications=yes`) has something concrete to detect via Windows'
+# Restart Manager during a silent self-update install. Must match the
+# AppMutex name in R9Tools.iss's [Setup] section exactly (case-sensitive).
+_APP_MUTEX_NAME = "R9Tools_AppMutex"
+
+# Kept alive for the process lifetime; deliberately never CloseHandle()'d
+# (see _create_app_mutex()'s docstring for why).
+_app_mutex_handle = None
+
+
+def _create_app_mutex() -> None:
+    """Create (and hold, never release) a named Win32 mutex identifying
+    this running R9Tools process to Windows' Restart Manager.
+
+    This is NOT a single-instance lock: CreateMutexW is called with
+    bInitialOwner=False and the return value/GetLastError() is never
+    checked for ERROR_ALREADY_EXISTS, so multiple R9Tools processes can
+    still run side-by-side exactly as before this change.
+
+    Its only purpose is to close the race in updater.py's
+    launch_installer_and_quit(): previously, the extracted installer was
+    launched as a detached process and this app called
+    QApplication.quit() right after, hoping this process's file lock on
+    R9Tools.exe released before the installer's file-copy step ran — a
+    bare timing race with no synchronization. With R9Tools.iss's
+    `CloseApplications=yes` + `AppMutex=R9Tools_AppMutex` now set, Setup
+    uses Restart Manager to find the process holding this mutex and
+    actually wait for/force-close it before touching any files, instead
+    of racing a fire-and-forget Popen against this process's own shutdown
+    teardown (engine.stop() closing device handles, threads joining,
+    etc.).
+
+    The HANDLE is stashed in a module-level global only so it can never
+    accidentally be a candidate for cleanup; it does not need explicit
+    closing — Windows closes it automatically when this process exits,
+    which is exactly the condition Restart Manager is waiting to detect.
+    """
+    global _app_mutex_handle
+    if sys.platform != "win32":
+        return
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.argtypes = [
+            wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR,
+        ]
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        _app_mutex_handle = kernel32.CreateMutexW(None, False, _APP_MUTEX_NAME)
+        if not _app_mutex_handle:
+            logging.warning(
+                "CreateMutexW(%r) failed (error %d) -- a silent self-update "
+                "install will fall back to relying on this process having "
+                "already exited on its own by the time Setup's file-copy "
+                "step runs, instead of Restart Manager waiting for/closing "
+                "it deterministically.",
+                _APP_MUTEX_NAME, ctypes.GetLastError(),
+            )
+    except Exception:
+        logging.exception("Failed to create app mutex %r", _APP_MUTEX_NAME)
 
 # Interception kernel filter driver service names. install-interception.exe
 # (bundled by R9Tools.iss) registers these as "keyboard"/"mouse" (DisplayName
@@ -166,6 +229,7 @@ def _qt_message_filter(msg_type, _context, msg):
 
 def main():
     setup_logging()
+    _create_app_mutex()
     _interception_driver(start=True)
     qInstallMessageHandler(_qt_message_filter)
     app = QApplication(sys.argv)

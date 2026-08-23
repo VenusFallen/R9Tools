@@ -15,8 +15,11 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from datetime import datetime
 from pathlib import Path
 import urllib.request
+
+import crash_logging
 
 _APP_REPO = "VenusFallen/R9Tools"
 _API      = "https://api.github.com/repos/{repo}/releases/latest"
@@ -136,20 +139,45 @@ def launch_installer_and_quit(installer_path: Path) -> None:
     Launch the extracted R9Tools_Setup.exe as a fully detached, independent
     process performing a silent, unattended update-install, then return.
 
-    The caller should quit the running app (QApplication.instance().quit()
-    or equivalent) immediately after this returns, so this process's file
-    lock on the currently-installed R9Tools.exe releases and the installer
-    can replace it.
+    The caller should still quit the running app (QApplication.instance()
+    .quit() or equivalent) immediately after this returns, as a courtesy so
+    this process exits promptly and cleanly. That said, this is no longer
+    what makes replacing this process's file lock on the currently-
+    installed R9Tools.exe safe: R9Tools.iss's [Setup] now sets
+    `CloseApplications=yes` + `AppMutex=R9Tools_AppMutex`, so Setup itself
+    uses Windows' Restart Manager to find the running R9Tools process (via
+    the named mutex main.py's _create_app_mutex() holds for its whole
+    lifetime) and actually wait for/force-close it before its file-copy
+    step runs, rather than racing a fire-and-forget Popen against this
+    process's own shutdown teardown. Previously there was no such
+    synchronization at all -- a bare hope this process would exit fast
+    enough -- which is the root cause of a real observed failure where the
+    update downloaded but the exe was never replaced (Setup likely
+    deferred the locked-file copy to next reboot, or aborted the copy
+    outright) and the app kept reporting the old version.
 
     Flags (Inno Setup command-line silent-install switches):
       /VERYSILENT          - no wizard UI at all; the "Installing..."
                               progress window itself is hidden too
                               (plain /SILENT still shows a progress window)
       /SUPPRESSMSGBOXES    - suppress the few informational message boxes
-                              Setup can otherwise show (e.g. "close this
-                              running application?") during a silent run
+                              Setup can otherwise show during a silent run;
+                              combined with CloseApplications=yes above,
+                              Setup closes the running app automatically
+                              rather than showing a "close this running
+                              application?" prompt no one is there to click
       /NORESTART            - never prompt for or force a reboot even if a
                               restart would normally be suggested
+      /LOG=<path>            - write a full Inno Setup install log to a
+                              timestamped file under the same
+                              %LOCALAPPDATA%\\R9Tools\\logs directory
+                              crash_logging.py uses for the app's own log,
+                              so a silent update attempt (successful or
+                              not) leaves a real diagnostic trail instead
+                              of none -- the [Code] section's own Log()
+                              calls (e.g. RelaunchAppAfterSilentUpdate's
+                              retry attempts) only ever reach this file;
+                              without /LOG they're discarded entirely
 
     The subprocess is started detached from this process (new process
     group, breakaway from any job object this process might be part of) so
@@ -168,8 +196,23 @@ def launch_installer_and_quit(installer_path: Path) -> None:
         | subprocess.CREATE_BREAKAWAY_FROM_JOB
     )
 
+    log_path = None
+    try:
+        log_dir = Path(crash_logging.get_log_dir())
+        log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path = log_dir / f"update_install_{timestamp}.log"
+    except Exception:
+        # Best-effort only -- a log path we couldn't prepare must never
+        # block the actual update install from proceeding.
+        log_path = None
+
+    args = [str(installer_path), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
+    if log_path is not None:
+        args.append(f"/LOG={log_path}")
+
     subprocess.Popen(
-        [str(installer_path), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
+        args,
         creationflags=creationflags,
         close_fds=True,
     )

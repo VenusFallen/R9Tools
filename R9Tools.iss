@@ -1,6 +1,6 @@
 [Setup]
 AppName=R9Tools
-AppVersion=1.3.0
+AppVersion=1.3.2
 AppPublisher=VenusFallen
 AppSupportURL=https://github.com/VenusFallen/R9Tools
 DefaultDirName={autopf}\R9Tools
@@ -14,6 +14,25 @@ SetupIconFile=assets\R9Tools.ico
 UninstallDisplayIcon={app}\R9Tools.exe
 ; Require Windows 10 or later
 MinVersion=10.0
+
+; Closes a running R9Tools.exe via Windows' Restart Manager before the
+; [Files] copy step touches it, instead of relying on updater.py's
+; launch_installer_and_quit() winning a bare timing race against this
+; process's own shutdown teardown (the previous behavior, confirmed as the
+; root cause of a real v1.3.0->v1.3.1 update that silently failed to
+; replace the running exe). AppMutex names the mutex main.py's
+; _create_app_mutex() creates and holds for the app's whole lifetime --
+; must match that name exactly (case-sensitive). In silent installs
+; (/VERYSILENT /SUPPRESSMSGBOXES, as updater.py always passes) Setup closes
+; the app automatically with no prompt.
+CloseApplications=yes
+AppMutex=R9Tools_AppMutex
+; Setup's own post-close auto-relaunch is disabled in favor of this
+; script's RelaunchAppAfterSilentUpdate() below (ssPostInstall), which
+; retries with a settle delay and verifies via tasklist that the relaunch
+; actually stuck -- Setup's default relaunch does neither and would also
+; race/duplicate with it.
+RestartApplications=no
 
 [Files]
 ; Main application
