@@ -124,17 +124,15 @@ class _FpsTracker:
         try:
             self._proc = subprocess.Popen(
                 [str(exe_path), "--process_id", str(pid), "--output_stdout",
-                 # Safety net: if a previous PresentMon child was ever hard-killed
-                 # (crash, forced kill()) without tearing down its ETW trace
-                 # session, the next launch would otherwise fail outright with
-                 # "trace session ... already running". This makes launches
-                 # self-healing regardless of how the last one ended.
+                 # Self-heals if a previous child was hard-killed without
+                 # tearing down its ETW trace session, which would otherwise
+                 # make this launch fail with "trace session already running".
                  "--stop_existing_session"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
-                # CREATE_NEW_PROCESS_GROUP is required for send_signal(CTRL_BREAK_EVENT)
-                # in stop() below to target only this child, not our own process tree.
+                # NEW_PROCESS_GROUP is required for send_signal(CTRL_BREAK_EVENT)
+                # in stop() below to target only this child.
                 creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
                 text=True,
                 bufsize=1,
@@ -156,15 +154,10 @@ class _FpsTracker:
         if proc is not None:
             try:
                 # Prefer a graceful CTRL_BREAK_EVENT over terminate()/kill():
-                # PresentMon installs a console control handler that stops its
-                # ETW trace session cleanly on break. TerminateProcess (what
-                # Popen.terminate()/kill() use) skips that handler entirely and
-                # can leave the ETW session orphaned, which then makes the
-                # *next* launch fail until --stop_existing_session cleans it up
-                # (confirmed empirically against the bundled binary — this is
-                # a real, not theoretical, failure mode). Still bounded by the
-                # short timeouts below so a stuck child never meaningfully
-                # delays shutdown.
+                # PresentMon's console control handler stops its ETW trace
+                # session cleanly on break, whereas TerminateProcess skips
+                # that handler and can leave the session orphaned (breaking
+                # the next launch until --stop_existing_session cleans it up).
                 proc.send_signal(signal.CTRL_BREAK_EVENT)
             except Exception:
                 try:
@@ -208,10 +201,9 @@ class _FpsTracker:
                 if not line:
                     continue
                 if header_idx is None:
-                    # Match case-insensitively — shipped PresentMon builds emit
-                    # "msBetweenPresents" (lower-case "ms"), not the
-                    # "MsBetweenPresents" capitalization used in some docs/older
-                    # builds. Confirmed by running the actual bundled binary.
+                    # Match case-insensitively — shipped PresentMon builds
+                    # emit "msBetweenPresents", not the "MsBetweenPresents"
+                    # capitalization used in some docs/older builds.
                     cols = [c.strip().lower() for c in line.split(",")]
                     header_idx = cols.index("msbetweenpresents") if "msbetweenpresents" in cols else -1
                     continue
@@ -237,8 +229,8 @@ class _FpsTracker:
 def _bootstrap():
     global _lhm_available, _Computer
     try:
-        # Prefer persistent lib/ next to the exe (allows dropping in newer DLLs
-        # without rebuilding).  Fall back to the bundled copy inside sys._MEIPASS.
+        # Prefer persistent lib/ next to the exe (allows dropping in newer
+        # DLLs without rebuilding); fall back to the bundled sys._MEIPASS copy.
         if getattr(sys, "frozen", False):
             _persistent = Path(sys.executable).parent / "lib"
             _bundled    = Path(sys._MEIPASS) / "lib"
@@ -368,13 +360,10 @@ class StatsPoller:
     def _pollLoop(self):
         try:
             comp = _Computer()
-            # Skip Ring0.Open() entirely (LHM >= 0.9.5, see Computer.IsRing0Enabled).
-            # Ring0 is what extracts/installs the bundled WinRing0 kernel driver on
-            # first use — Microsoft's Vulnerable Driver Blocklist flags and quarantines
-            # it (VulnerableDriver:WinNT/Winring0). Disabling it means no driver service
-            # is ever created; the tradeoff is losing sensors that need raw MSR/PCI
-            # access (e.g. some CPU temperature sensors) on hardware whose vendor-level
-            # sensors don't already cover that data through another path.
+            # Ring0 extracts/installs LHM's bundled WinRing0 kernel driver,
+            # which Microsoft's Vulnerable Driver Blocklist quarantines —
+            # disabling it trades away sensors needing raw MSR/PCI access
+            # (e.g. some CPU temps) for never creating that driver service.
             comp.IsRing0Enabled  = False
             comp.IsCpuEnabled    = True
             comp.IsGpuEnabled    = True

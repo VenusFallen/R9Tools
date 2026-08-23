@@ -2,35 +2,32 @@
 device_watch.py — WM_DEVICECHANGE-based detection of a keyboard/mouse
 device being disabled/disconnected mid-session.
 
-Why this exists (confirmed empirically this session): when a keyboard/mouse
-device is disabled via Device Manager / `Disable-PnpDevice` mid-session, the
-Interception I/O calls (await_input/receive/send) don't throw — they just
-silently stop returning input, indistinguishable from the user simply not
-touching the device. recoil.py's existing consecutive-I/O-exception counter
-(see RecoilEngine._onInterceptionIoFailure) cannot see this at all. Pushed
-OS device-change notifications can — confirmed live via a working ctypes
-RegisterDeviceNotificationW test (~1.0s detection vs ~1.8s for 0.5s-interval
-`Get-PnpDevice` polling; ~23ms recovery detection after re-enable).
+Why this exists: when a keyboard/mouse device is disabled via Device
+Manager / `Disable-PnpDevice` mid-session, Interception's I/O calls
+(await_input/receive/send) don't throw — they just silently stop
+returning input, indistinguishable from the user not touching the device.
+recoil.py's I/O-exception counter (RecoilEngine._onInterceptionIoFailure)
+can't see this at all, but pushed OS device-change notifications can:
+measured ~1.0s detection vs ~1.8s for 0.5s-interval `Get-PnpDevice`
+polling, and ~23ms recovery detection after re-enable.
 
 This module owns two independent, ctypes-only pieces:
   - Win32 plumbing to register for + parse WM_DEVICECHANGE device-interface
     notifications (register_device_notifications, parse_device_change,
-    WM_DEVICECHANGE constant for the caller's native event filter to match
-    on). No Qt dependency here — panel_window.py's _DeviceChangeFilter
-    (a QAbstractNativeEventFilter, mirroring its existing
-    _DisplayChangeFilter for WM_DISPLAYCHANGE) is what actually hooks this
-    into the app's Qt message pump and owns the HWND.
-  - DeviceFailureWatcher: a small, Qt-QTimer-driven (but injectable, see
-    `schedule` param) debounce/batch state machine that turns noisy raw
-    arrival/removal events into two clean, low-frequency callbacks:
-    on_failed_batch(ids) and on_recovered(ids). Kept separate from the
-    Win32 plumbing above so its logic is unit-testable without any ctypes
-    memory reads or a live HWND — see tests/test_device_watch.py.
+    WM_DEVICECHANGE). No Qt dependency here — panel_window.py's
+    _DeviceChangeFilter is what hooks this into the app's Qt message pump
+    and owns the HWND.
+  - DeviceFailureWatcher: a QTimer-driven (but injectable, see `schedule`
+    param) debounce/batch state machine that turns noisy raw arrival/
+    removal events into two clean callbacks: on_failed_batch(ids) and
+    on_recovered(ids). Kept separate from the Win32 plumbing so it's
+    unit-testable without ctypes memory reads or a live HWND (see
+    tests/test_device_watch.py).
 
-CRITICAL ctypes gotcha (confirmed today): ctypes defaults every unset
-restype to 32-bit c_int. Pointer/handle-returning Win32 functions on this
-64-bit process WILL overflow and crash unless .restype/.argtypes are set
-explicitly on every function used here.
+CRITICAL ctypes gotcha: every unset restype defaults to 32-bit c_int.
+Pointer/handle-returning Win32 functions on this 64-bit process will
+overflow and crash unless .restype/.argtypes are set explicitly on every
+function used here.
 """
 import ctypes
 import ctypes.wintypes as wintypes
@@ -47,8 +44,7 @@ DBT_DEVICEREMOVECOMPLETE = 0x8004
 DBT_DEVTYP_DEVICEINTERFACE   = 5
 DEVICE_NOTIFY_WINDOW_HANDLE  = 0x00000000
 
-# Well-known device interface GUIDs (ntddkbd.h / ntddmou.h / hidclass.h) —
-# confirmed working via CLSIDFromString + RegisterDeviceNotificationW.
+# Well-known device interface GUIDs (ntddkbd.h / ntddmou.h / hidclass.h).
 GUID_DEVINTERFACE_MOUSE    = "{378de44c-56ef-11d1-bc8c-00a0c91405dd}"
 GUID_DEVINTERFACE_KEYBOARD = "{884b96c3-56ef-11d1-bc8c-00a0c91405dd}"
 GUID_DEVINTERFACE_HID      = "{4d1e55b2-f16f-11cf-88cb-001111000030}"
@@ -99,17 +95,13 @@ def _make_guid(guid_str: str) -> _GUID:
 def register_device_notifications(hwnd: int) -> list:
     """Register for arrival/removal notifications on the mouse, keyboard,
     and generic-HID device interface classes against the given real HWND
-    (see panel_window.py's _TopBarWindow, which reuses its own winId() —
-    the existing native-event-filter precedent already listens on this
-    same window for WM_DISPLAYCHANGE).
+    (see panel_window.py's _TopBarWindow, which reuses its own winId()).
 
-    Returns the list of successfully-registered notification handles (for
-    UnregisterDeviceNotification if a caller ever needs to tear this down;
-    not currently called anywhere, matching this app's existing convention
-    of not explicitly unwinding the WM_DISPLAYCHANGE filter either — both
-    live for the app's lifetime and are cleaned up by process exit).
-    Registration failures are logged and skipped rather than raised, so one
-    bad GUID can't take down the other two."""
+    Returns the successfully-registered notification handles; not
+    explicitly torn down anywhere (both this and the WM_DISPLAYCHANGE
+    filter live for the app's lifetime). Registration failures are logged
+    and skipped rather than raised, so one bad GUID can't take down the
+    other two."""
     handles = []
     for guid_str in _ALL_GUIDS:
         try:
@@ -138,14 +130,12 @@ def _symlink_to_instance_id(symlink: str):
     """Parse a DEV_BROADCAST_DEVICEINTERFACE.dbcc_name symbolic-link path
     (e.g. r"\\\\?\\HID#VID_046D&PID_C24A&MI_00#8&d4d6dff&0&0000#{4d1e55b2-...}")
     into the device instance ID format `Get-PnpDevice`/`Disable-PnpDevice
-    -InstanceId` expect (e.g. r"HID\\VID_046D&PID_C24A&MI_00\\8&D4D6DFF&0&0000").
-
-    Strips the leading "\\\\?\\" prefix, takes the first 3 '#'-delimited
+    -InstanceId` expect (e.g. r"HID\\VID_046D&PID_C24A&MI_00\\8&D4D6DFF&0&0000"):
+    strips the leading "\\\\?\\" prefix, takes the first 3 '#'-delimited
     segments (discarding the trailing device-interface-GUID segment),
-    replaces '#' with '\\', and uppercases the result — verified against
-    the exact example symlink captured during live testing this session.
-    Returns None for anything that doesn't have the expected shape (fewer
-    than 4 '#'-delimited segments) rather than guessing."""
+    replaces '#' with '\\', and uppercases. Returns None for anything that
+    doesn't have the expected shape (fewer than 4 segments) rather than
+    guessing."""
     s = symlink
     if s.startswith("\\\\?\\"):
         s = s[4:]
@@ -189,16 +179,14 @@ def parse_device_change(wparam: int, lparam: int):
 
 def _qt_schedule(ms: int, fn):
     """Default `schedule` implementation for DeviceFailureWatcher: fires
-    `fn` once after `ms` milliseconds via a single-shot QTimer, and returns
-    a zero-arg cancel callable. Only imports PySide6 lazily (at call time)
-    so this module stays importable — and DeviceFailureWatcher's debounce
-    logic stays unit-testable — without a live QApplication (see
-    tests/test_device_watch.py, which injects a fake `schedule` instead).
+    `fn` after `ms` milliseconds via a single-shot QTimer, returning a
+    cancel callable. PySide6 is imported lazily so this module (and
+    DeviceFailureWatcher's debounce logic) stays unit-testable without a
+    live QApplication (see tests/test_device_watch.py).
 
-    The fired/pending QTimer is kept alive via the module-level `_live` set
-    below (not just via the returned closure) since an un-parented QTimer
-    with no other Python references can otherwise be garbage-collected
-    before it fires — a known PySide gotcha."""
+    The QTimer is kept alive via the module-level `_live` set — an
+    un-parented QTimer with no other Python references can otherwise be
+    garbage-collected before it fires, a known PySide gotcha."""
     from PySide6.QtCore import QTimer
 
     timer = QTimer()
@@ -228,31 +216,26 @@ class DeviceFailureWatcher:
 
       on_failed_batch(ids: list[str])
           Called once a removal has "settled" (no further arrival for that
-          same device within `remove_settle_ms`) — i.e. treated as a
-          genuine, sustained failure rather than transient re-enumeration
-          noise. If multiple different devices settle-fail within
-          `batch_window_ms` of the first one, they're delivered together
-          in a single call rather than one call per device (confirmed live:
-          a single disable/enable cycle produces multiple, sometimes
-          duplicate, transient remove/arrival pairs within ~500ms-1s of
-          each other — reacting to every raw event would be noisy and,
-          worse, would pop the notification UI more than once per real
-          event). Always passes the *current full* set of settled-failed
-          device IDs (sorted), not just the newly-added ones, so a caller
-          driving a UI list doesn't have to track deltas itself.
+          device within `remove_settle_ms`), treating it as a genuine
+          failure rather than transient re-enumeration noise. Devices that
+          settle-fail within `batch_window_ms` of each other are delivered
+          together in one call, since a single disable/enable cycle can
+          produce multiple duplicate remove/arrival pairs within ~500ms-1s
+          and reacting to every raw event would pop the notification UI
+          more than once per real event. Always passes the current full
+          sorted set of settled-failed device IDs, not just the new ones,
+          so a caller driving a UI list doesn't have to track deltas.
 
       on_recovered(ids: list[str])
-          Called once an arrival has settled (no further removal for that
-          device within `arrive_settle_ms`) for a device that was
-          previously in the failed set. Passes the *remaining* settled-
-          failed set (sorted) — an empty list means full recovery. Not
-          batched across devices (recovery has no "multiple popups" risk
-          to avoid, and this session's live testing showed recovery
-          detection is fast — no reason to add an extra grouping delay).
+          Called once an arrival has settled (no further removal within
+          `arrive_settle_ms`) for a previously-failed device. Passes the
+          remaining settled-failed set (sorted); an empty list means full
+          recovery. Not batched across devices — recovery detection is
+          fast enough that an extra grouping delay isn't needed.
 
-    `schedule(ms, fn) -> cancel_fn` is injectable purely for unit testing
-    the debounce/batch logic without a live Qt event loop; production
-    callers should leave it as the default (`_qt_schedule`).
+    `schedule(ms, fn) -> cancel_fn` is injectable for unit testing the
+    debounce/batch logic without a live Qt event loop; production callers
+    should leave it as the default (`_qt_schedule`).
     """
 
     _REMOVE_SETTLE_MS = 1750  # "sustained" threshold; observed noise settles well under this

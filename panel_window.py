@@ -51,18 +51,9 @@ class _DisplayChangeFilter(QAbstractNativeEventFilter):
     """Watches raw Win32 messages for WM_DISPLAYCHANGE so the topbar/panel
     can react to a live resolution change (e.g. a game switching into a
     custom exclusive-fullscreen resolution) without requiring an app
-    restart.
-
-    QScreen's own Qt-side signals (geometryChanged / primaryScreenChanged)
-    are the idiomatic Qt mechanism for this, but they are not reliably
-    emitted on Windows for a resolution change driven by another process's
-    exclusive-fullscreen mode switch — that path goes through
-    ChangeDisplaySettings and broadcasts WM_DISPLAYCHANGE directly, which
-    Qt's own screen-tracking may or may not pick up promptly depending on
-    Qt/driver version. Hooking the raw message is the same fix already
-    applied to dx11_overlay.py's window and is the more dependable of the
-    two for this specific case, so it's used here instead of relying on
-    QScreen alone."""
+    restart. QScreen's Qt-side signals aren't reliably emitted for a
+    resolution change driven by another process's exclusive-fullscreen
+    mode switch, so the raw message is hooked directly instead."""
 
     def __init__(self, onChange):
         super().__init__()
@@ -86,12 +77,8 @@ class _DisplayChangeFilter(QAbstractNativeEventFilter):
 class _DeviceChangeFilter(QAbstractNativeEventFilter):
     """Watches raw Win32 messages for WM_DEVICECHANGE and feeds parsed
     arrival/removal events into a device_watch.DeviceFailureWatcher.
-
-    Mirrors _DisplayChangeFilter above exactly — same rationale: this app
-    already has a live Qt message pump via _TopBarWindow, so hooking the
-    raw message through nativeEventFilter() is preferred over spinning up
-    a separate ctypes message-only window/thread (which is only needed for
-    a standalone script with no Qt event loop to hook into)."""
+    Mirrors _DisplayChangeFilter: hooks the existing Qt message pump
+    instead of spinning up a separate message-only window/thread."""
 
     def __init__(self, watcher: "device_watch.DeviceFailureWatcher"):
         super().__init__()
@@ -156,18 +143,14 @@ class _TopBarWindow(QWidget):
         self._applyBarStyle()
 
         # Keep a reference — QAbstractNativeEventFilter instances must stay
-        # alive for as long as they're installed, and there's only ever one
-        # _TopBarWindow for the app's lifetime so installing once here is
-        # sufficient (no risk of double-installing across multiple windows).
+        # alive for as long as they're installed.
         self._displayFilter = _DisplayChangeFilter(self._onDisplayChange)
         QApplication.instance().installNativeEventFilter(self._displayFilter)
 
         # Device-disable/reconnect detection (see device_watch.py). Default
-        # no-op callbacks — main.py supplies the real ones post-construction
-        # via setDeviceFailureCallbacks()/PanelWindow, same "wire it all up
-        # in main.py" convention as every other bridge/engine callback in
-        # this app. registerDeviceNotificationW needs a real HWND, which
-        # winId() forces creation of even before this window is ever shown.
+        # no-op callbacks — main.py supplies the real ones via
+        # setDeviceFailureCallbacks(). winId() forces HWND creation, which
+        # registerDeviceNotificationW requires.
         self._onDeviceFailedCb    = lambda ids: None
         self._onDeviceRecoveredCb = lambda ids: None
         self._deviceWatcher = device_watch.DeviceFailureWatcher(
@@ -379,20 +362,10 @@ class PanelWindow(QWidget):
     def showEvent(self, event):
         """Re-run the size/position fix once the window is actually visible.
 
-        Every code path that expands the panel (topbar tab click while
-        collapsed, arrow-key expand, the overlay hotkey) calls _selectTab()/
-        _reposition() *before* self.show() so the target tab is already
-        current when the window appears. But _reposition()'s invalidate()+
-        adjustSize() calls, when run on a still-hidden top-level widget, can
-        compute a stale/incorrect size — Qt only fully activates layouts and
-        polishes stylesheet-dependent widgets once they are actually shown,
-        so a hidden widget's sizeHint() can lag behind its true rendered
-        size (observed drift of tens of px, and in the worst case the
-        previous tab's much larger size sticking around entirely). That
-        computation is correct again immediately after show(), so redo it
-        here unconditionally on every showEvent — regardless of which call
-        path got us here — rather than relying on each call site to order
-        things correctly."""
+        A hidden top-level widget's sizeHint() can lag behind its true
+        rendered size (Qt only fully activates layouts once shown), so
+        _reposition() is redone here unconditionally rather than trusting
+        callers to have sized things correctly before show()."""
         super().showEvent(event)
         self._reposition()
 
@@ -502,11 +475,10 @@ class PanelWindow(QWidget):
         screen = QApplication.primaryScreen().geometry()
         y = TOPBAR_MARGIN_TOP + TOPBAR_H + TOPBAR_MARGIN_BOTTOM
         activePanel = self._panels[self._activeTab]
-        # Per-tab content width (defaults to PANEL_W; a tab like Macros can
-        # opt into a wider/landscape layout via Panel.panel_width). Must be
-        # applied here — not just in _selectTab() — since _reposition() is
-        # also called directly from showEvent()/_onDisplayChange() without
-        # going through _selectTab() first.
+        # Per-tab content width (defaults to PANEL_W; e.g. Macros opts into
+        # a wider layout via Panel.panel_width). Applied here rather than
+        # only in _selectTab() since showEvent()/_onDisplayChange() also
+        # call _reposition() directly.
         panelW = getattr(activePanel, "panel_width", PANEL_W)
         self._contentFrame.setFixedWidth(panelW)
         if activePanel.right_anchor:
@@ -515,26 +487,10 @@ class PanelWindow(QWidget):
             self.move(TOPBAR_MARGIN_SIDE, y)
         # Force the cached layout hints to recompute for the newly-current
         # page before resizing, otherwise the window can keep the size the
-        # largest previously-shown tab required.
-        #
-        # A plain invalidate() on just the outer layouts isn't enough when a
-        # QStackedWidget is nested inside another layout (as _stack is here,
-        # and as MacrosPanel's own inner list/editor stack is one level
-        # further down): a parent layout, when asked for a stacked-widget
-        # child's contribution to its own sizeHint, goes through
-        # QWidgetItem::sizeHint() -> child.layout()->totalSizeHint(), which
-        # bypasses _ContentStack's Python-level sizeHint() override
-        # entirely and reads the QStackedLayout's own separately-cached
-        # totalSizeHint() instead. That cache is only refreshed by calling
-        # activate() on that *specific* layout — invalidate() alone just
-        # marks it dirty without recomputing it — and it has to happen
-        # bottom-up (innermost stacked layout first) since each level's
-        # activate() bakes in whatever its children currently report.
-        # Verified live: without this, shrinking a panel's content while
-        # its tab stays active and visible (e.g. macro editor: deleting
-        # action rows) leaves the window stuck at the largest size ever
-        # reached, even though sizeHint() computed via a fresh Python-level
-        # query looks correct throughout.
+        # largest previously-shown tab required. A plain invalidate() isn't
+        # enough for a nested QStackedWidget (_stack, and MacrosPanel's own
+        # inner stack) — each level's totalSizeHint() cache only refreshes
+        # via activate(), called bottom-up (innermost stack first).
         self._stack.layout().invalidate()
         self._stack.layout().activate()
         self._contentFrame.layout().invalidate()
@@ -573,11 +529,9 @@ class PanelWindow(QWidget):
         self._topBarWin.flashBorder(color)
 
     # ------------------------------------------------------------------
-    # Device-disable/reconnect watcher (see device_watch.py) — the actual
-    # WM_DEVICECHANGE hook lives on _TopBarWindow (it owns the real HWND
-    # this app registers notifications against), passthrough kept here so
-    # main.py only has to know about PanelWindow, matching every other
-    # engine-callback wiring call it makes.
+    # Device-disable/reconnect watcher (see device_watch.py) — the real
+    # WM_DEVICECHANGE hook lives on _TopBarWindow (it owns the HWND);
+    # this is just a passthrough so main.py only deals with PanelWindow.
     # ------------------------------------------------------------------
 
     def setDeviceFailureCallbacks(self, on_failed, on_recovered):

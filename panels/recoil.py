@@ -101,14 +101,11 @@ class RecoilPanel(Panel):
         self._slotCapturing     = False   # slot key capture
         self._slotCaptureCallback = None
         self._slotCaptureResult   = None
-        # Set when a weapon/slot capture thread couldn't stand up the
-        # interception driver context at all (distinct from a legitimate
-        # "no keybind" result from pressing Esc) — checked by the capture
-        # -done handlers so a driver failure isn't misread as Esc.
+        # Set when a capture thread couldn't stand up the interception
+        # driver context at all (distinct from a legitimate "no keybind"
+        # result from pressing Esc) — checked by the -done handlers so a
+        # driver failure isn't misread as Esc.
         self._slotCaptureFailed   = False
-        # Same distinction for the recoil-trigger and RF-trigger combo
-        # captures, which don't have an Esc-cancels-with-no-result path but
-        # still shouldn't silently keep the old binding on driver failure.
         self._captureFailed       = False
         self._rfTrigCaptureFailed = False
 
@@ -850,12 +847,9 @@ class RecoilPanel(Panel):
         prompt = "Press toggle key..."
 
         def callback(result):
-            # Unlike weapon-slot capture, a toggle with no captured binding
-            # is meaningless (there's nothing to convert hold->toggle for),
-            # and profiles.py's sanitizer drops any toggle entry lacking an
-            # explicit "key"/"mouse" type anyway — so, like RF slot capture,
-            # simply do nothing (no row added) rather than committing a
-            # binding-less entry the user would see silently vanish later.
+            # A toggle with no captured binding is meaningless, so do
+            # nothing (no row added) rather than committing an entry
+            # profiles.py's sanitizer would silently drop later.
             if not result:
                 return
             conflict = keybind_conflicts.findConflict(self._settings, result)
@@ -944,13 +938,9 @@ class RecoilPanel(Panel):
                                 "e0":   bool(stroke.flags & interception.KeyFlag.KEY_E0),
                             }
                     elif isinstance(stroke, interception.MouseStroke):
-                        # Scroll ticks are deliberately never turned into a
-                        # result here — toggling doesn't apply to an
-                        # instantaneous scroll event, and this capture,
-                        # unlike weapon/RF-slot capture, never offers scroll
-                        # as a selectable binding. Any scroll stroke just
-                        # falls through unhandled and the loop keeps
-                        # waiting for an actual key or mouse-button press.
+                        # Scroll ticks are deliberately never a valid toggle
+                        # binding; unhandled strokes just keep the loop
+                        # waiting for a real key/mouse-button press.
                         for name, (down_flag, up_flag) in MOUSE_BUTTON_FLAGS.items():
                             if stroke.button_flags & up_flag:
                                 result = {"type": "mouse", "button": name}
@@ -1021,6 +1011,53 @@ class RecoilPanel(Panel):
         ) == QMessageBox.StandardButton.Yes
 
     # ------------------------------------------------------------------
+    # Visibility — cancel in-flight captures the instant this tab stops
+    # being shown (see hideEvent()).
+    # ------------------------------------------------------------------
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._cancelAllCaptures()
+
+    def _cancelAllCaptures(self):
+        """Stop any in-flight capture thread and drop its pending callback
+        the moment this panel is no longer visible (tab switch or panel
+        collapse). Capture threads listen for the next key/mouse press with
+        no timeout, so leaving one running let a later unrelated keypress
+        silently "complete" it and, on conflict, pop an application-modal
+        QMessageBox that blocked input to the whole app with no visible
+        dialog on top — cancelling here makes a late completion a no-op."""
+        if not (self._capturing or self._rfTrigCapturing
+                or self._slotCapturing or self._toggleCapturing):
+            return
+
+        self._capturing       = False
+        self._rfTrigCapturing = False
+        self._slotCapturing   = False
+        self._toggleCapturing = False
+        self._weaponCapture   = False
+
+        self._slotCaptureCallback   = None
+        self._slotCaptureResult     = None
+        self._toggleCaptureCallback = None
+        self._toggleCaptureResult   = None
+
+        self._weaponCaptureLabel.setVisible(False)
+        self._slotCaptureLabel.setVisible(False)
+        self._toggleCaptureLabel.setVisible(False)
+
+        self._keybindBtn.setText(theme.comboLabel(self._settings["recoil"]["trigger_keys"]))
+        self._keybindBtn.setStyleSheet("")
+        self._rfTrigBtn.setText(theme.comboLabel(
+            self._settings.get("rapidfire", {}).get("trigger_keys", ["mouse_left"])))
+        self._rfTrigBtn.setStyleSheet("")
+
+        # Restores hotkeys immediately rather than waiting up to 100ms for
+        # the background thread's own finally block to notice and do it;
+        # harmless to call redundantly if that also fires a moment later.
+        self._engine.setSuspendHotkeys(False)
+
+    # ------------------------------------------------------------------
     # Reload / engine callbacks
     # ------------------------------------------------------------------
 
@@ -1044,10 +1081,9 @@ class RecoilPanel(Panel):
         self._rfTrigBtn.setText(theme.comboLabel(rf.get("trigger_keys", ["mouse_left"])))
         self._refreshSlotRows()
 
-        # Toggles — settings["toggles"] is a flat top-level list, already
-        # replaced wholesale (same object identity as self._settings) by
-        # PanelWindow._onProfileLoad() before reload() runs, so there's no
-        # sub-dict to .update() here — just rebuild the rows from it.
+        # Toggles — settings["toggles"] is already replaced wholesale by
+        # PanelWindow._onProfileLoad() before reload() runs, so just
+        # rebuild the rows rather than .update()-ing a sub-dict.
         self._refreshToggleRows()
 
     def updateStrength(self, value: int):
@@ -1088,12 +1124,10 @@ class RecoilPanel(Panel):
     # ------------------------------------------------------------------
 
     def _pollStatus(self):
-        # Keep the enable switch in sync with the underlying state — the
-        # engine's hotkey toggle (recoil_toggle) mutates settings["recoil"]
-        # ["enabled"] directly on the shared settings dict, bypassing this
-        # panel entirely. ToggleSwitch.set() only updates the visual and
-        # never re-fires the command callback, so this can't loop back into
-        # _onRecoilEnabledChange / _onSettingsChanged.
+        # Keep the enable switch in sync — the engine's hotkey toggle
+        # mutates settings["recoil"]["enabled"] directly, bypassing this
+        # panel; ToggleSwitch.set() only updates the visual, so this can't
+        # loop back into _onRecoilEnabledChange.
         self._recoilEnabledSwitch.set(self._settings["recoil"]["enabled"])
 
         # Recoil status

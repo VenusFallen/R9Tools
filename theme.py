@@ -411,12 +411,10 @@ class KeybindButton(QWidget):
         # so _finish() can show a real failure message instead of just
         # silently reverting to the previous binding.
         self._captureFailed   = False
-        # Conflict-check wiring — settings is the full app settings dict and
-        # exclude_id is this field's own registry id (see
-        # keybind_conflicts.iterBindingSources), so re-capturing the same
-        # key for the same field isn't reported as a conflict with itself.
-        # When settings is None (no caller has opted in), conflict checking
-        # is skipped entirely and behaviour is unchanged.
+        # Conflict-check wiring — exclude_id is this field's own registry id
+        # (see keybind_conflicts.iterBindingSources) so re-capturing the
+        # same key for this field isn't reported as a conflict with itself.
+        # settings=None skips conflict checking entirely.
         self._settings   = settings
         self._exclude_id = exclude_id
 
@@ -551,15 +549,9 @@ class KeybindButton(QWidget):
                 self._settings, self._binding, self._exclude_id)
             if conflict:
                 newLabel = self._bindingLabel()
-                # Menu Toggle and Quit (exclude_id "hotkey:overlay_toggle" /
-                # "hotkey:quit") are a hard, non-overridable mutual
-                # exclusion with remapper FROM sources and toggle bindings
-                # specifically — if the new binding is already used as a
-                # remap source or a toggle, revert immediately with no
-                # dialog choice. Any other conflict for these two buttons
-                # (or any conflict at all for the other three hotkey
-                # buttons) still goes through the normal warn-and-confirm
-                # flow below.
+                # Menu Toggle and Quit are a hard, non-overridable mutual
+                # exclusion with remapper FROM sources and toggle bindings —
+                # revert immediately with no dialog choice in that case.
                 if (self._exclude_id in ("hotkey:overlay_toggle", "hotkey:quit")
                         and keybind_conflicts.isProtectedSourceConflictLabel(conflict)):
                     usedBy = ("the remapper" if conflict.startswith("Remap:")
@@ -572,12 +564,8 @@ class KeybindButton(QWidget):
                     self._binding        = self._previousBinding
                     self._captureSuccess = False
                 else:
-                    # No longer a hard-block for every other conflict type:
-                    # warn the user which other binding already uses this
-                    # key/button and let them decide whether to keep the
-                    # new binding anyway or revert to what was bound before
-                    # this capture. Either way we fall through to the
-                    # normal commit/label-refresh logic below.
+                    # Every other conflict type: warn and let the user
+                    # choose to keep the new binding or revert.
                     keep = QMessageBox.question(
                         self, "Keybind already in use",
                         f"{newLabel} is already used for {conflict}.\n\n"
