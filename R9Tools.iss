@@ -1,6 +1,6 @@
 [Setup]
 AppName=R9Tools
-AppVersion=1.2.4
+AppVersion=1.3.0
 AppPublisher=VenusFallen
 AppSupportURL=https://github.com/VenusFallen/R9Tools
 DefaultDirName={autopf}\R9Tools
@@ -291,6 +291,33 @@ begin
   Result := gInterceptionNeedsRestart;
 end;
 
+// Returns True if a process named R9Tools.exe is currently running, per
+// tasklist's own image-name filter (/FI "IMAGENAME eq R9Tools.exe"). Used by
+// RelaunchAppAfterSilentUpdate() below to actually verify a ShellExec launch
+// took, rather than trusting ShellExec's own return value -- ShellExec with
+// ewNoWait only reports whether the OS accepted the launch request, not
+// whether the target process is still alive a moment later, which is
+// exactly the gap that let the bootloader-crash race below go undetected.
+function IsAppProcessRunning(): Boolean;
+var
+  ResultCode: Integer;
+  Output: TExecOutput;
+  I: Integer;
+  CombinedOutput: String;
+begin
+  Result := False;
+  if not ExecAndCaptureOutput('tasklist.exe',
+    '/FI "IMAGENAME eq R9Tools.exe" /NH', '',
+    SW_HIDE, ewWaitUntilTerminated, ResultCode, Output) then
+    Exit;
+
+  CombinedOutput := '';
+  for I := 0 to GetArrayLength(Output.StdOut) - 1 do
+    CombinedOutput := CombinedOutput + Output.StdOut[I] + #13#10;
+
+  Result := Pos('R9TOOLS.EXE', Uppercase(CombinedOutput)) > 0;
+end;
+
 // The [Run] "Launch R9Tools" entry above uses "skipifsilent" so it only
 // fires from the optional checkbox on the interactive Finished page (and is
 // correctly skipped for unattended/silent installs, per Inno Setup's
@@ -311,34 +338,76 @@ end;
 // empty Verb (defaults to "open") rather than "runas": Setup.exe is already
 // running elevated (PrivilegesRequired=admin above), and an explicit
 // "runas" verb here could otherwise trigger a redundant second UAC prompt.
-procedure CurStepChanged(CurStep: TSetupStep);
+//
+// Real-world testing of the silent auto-update path (v1.1.3 -> v1.1.4)
+// showed the relaunched R9Tools.exe occasionally fail at the PyInstaller
+// onefile bootloader level ("Failed to load Python DLL ...\_MEIxxxxx\
+// python314.dll") immediately after a ShellExec fired here -- even though
+// manually double-clicking the freshly installed R9Tools.exe afterward
+// worked fine. That points to a transient race right after the silent
+// install's file-copy step finishes: ssPostInstall fires with no settling
+// time, and this machine's antivirus (Microsoft Defender, real-time
+// protection confirmed enabled) is known to actively scan/quarantine
+// R9Tools's own on-disk files (observed quarantining R9Tools.sys as
+// "VulnerableDriver:WinNT/Winring0" in Defender's own history) -- a
+// freshly-launched process extracting a brand new python314.dll into a
+// brand new _MEI temp folder is exactly the kind of write AV real-time
+// scanning contends with.
+//
+// The original mitigation was a single fixed Sleep(2000) before one
+// ShellExec attempt, with no way to tell whether the relaunch actually
+// survived -- if 2 seconds wasn't enough settling time on a given machine
+// (slower disk, busier AV queue, etc.), the user was silently left with the
+// update installed but the app not running, with no retry and no record of
+// the failure beyond Setup's own log. This now verifies the relaunch via
+// IsAppProcessRunning() above and retries with an increasing settling delay
+// (2s, then 4s, then 6s) up to 3 attempts total before giving up, logging
+// every attempt either way so a failure is at least diagnosable from
+// Setup's log rather than silent.
+procedure RelaunchAppAfterSilentUpdate();
 var
   ResultCode: Integer;
+  Attempt: Integer;
+  SettleDelayMs: Integer;
+begin
+  SettleDelayMs := 2000;
+  for Attempt := 1 to 3 do
+  begin
+    Sleep(SettleDelayMs);
+    ShellExec('', ExpandConstant('{app}\R9Tools.exe'), '', '', SW_SHOWNORMAL,
+      ewNoWait, ResultCode);
+
+    // Give the bootloader a moment to either come up or crash outright (the
+    // observed "Failed to load Python DLL" failure mode dies well under a
+    // second after ShellExec fires) before checking whether it's actually
+    // still alive.
+    Sleep(1500);
+
+    if IsAppProcessRunning() then
+    begin
+      Log('RelaunchAppAfterSilentUpdate: R9Tools.exe confirmed running ' +
+        'after attempt ' + IntToStr(Attempt) + ' (settle delay was ' +
+        IntToStr(SettleDelayMs) + 'ms).');
+      Exit;
+    end;
+
+    Log('RelaunchAppAfterSilentUpdate: R9Tools.exe not found running after ' +
+      'attempt ' + IntToStr(Attempt) + ' (settle delay was ' +
+      IntToStr(SettleDelayMs) + 'ms) -- likely the bootloader race described ' +
+      'above; retrying with a longer settle delay.');
+    SettleDelayMs := SettleDelayMs + 2000;
+  end;
+
+  Log('RelaunchAppAfterSilentUpdate: gave up after 3 attempts -- the ' +
+    'silent update completed but R9Tools.exe did not stay running. The ' +
+    'user will need to launch it manually.');
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
     InstallInterceptionDriver();
 
   if (CurStep = ssPostInstall) and WizardSilent() then
-  begin
-    // Real-world testing of the silent auto-update path (v1.1.3 -> v1.1.4)
-    // showed the relaunched R9Tools.exe occasionally fail at the PyInstaller
-    // onefile bootloader level ("Failed to load Python DLL ...\_MEIxxxxx\
-    // python314.dll") immediately after this ShellExec fired -- even though
-    // manually double-clicking the freshly installed R9Tools.exe afterward
-    // worked fine. That points to a transient race right after the silent
-    // install's file-copy step finishes: ssPostInstall fires with no
-    // settling time, and this machine's antivirus (Microsoft Defender, real-
-    // time protection confirmed enabled) is known to actively scan/quarantine
-    // R9Tools's own on-disk files (observed quarantining R9Tools.sys as
-    // "VulnerableDriver:WinNT/Winring0" in Defender's own history) -- a
-    // freshly-launched process extracting a brand new python314.dll into a
-    // brand new _MEI temp folder is exactly the kind of write AV real-time
-    // scanning contends with. This Sleep is a pragmatic mitigation for that
-    // environmental/timing race, not a root-cause fix -- it gives the
-    // filesystem and any AV scan queue a moment to settle before the
-    // relaunch attempts to self-extract again.
-    Sleep(2000);
-    ShellExec('', ExpandConstant('{app}\R9Tools.exe'), '', '', SW_SHOWNORMAL,
-      ewNoWait, ResultCode);
-  end;
+    RelaunchAppAfterSilentUpdate();
 end;

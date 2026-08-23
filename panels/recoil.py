@@ -4,14 +4,14 @@ import interception
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
 import theme
 import keybind_conflicts
 from panels.base import Panel
 from recoil import MOUSE_BUTTON_FLAGS, _SCROLL_WHEEL_FLAG, scancodeLabel
-from interception_bringup import bringUpInterception
+from interception_bringup import bringUpInterception, destroyInterception
 
 _POLL_MS = 100
 
@@ -41,6 +41,17 @@ def _slotKeyLabel(sk: dict) -> str:
     if t == "scroll":
         return "Wheel Up" if sk.get("direction") == "up" else "Wheel Down"
     return scancodeLabel(sk.get("code", 0), sk.get("e0", False))
+
+
+def _toggleKeyLabel(t: dict) -> str:
+    """Toggle bindings are key/mouse only (never scroll — see the capture
+    thread below), so unlike _slotKeyLabel() there's no scroll branch."""
+    ttype = t.get("type")
+    if ttype == "mouse":
+        return _MOUSE_DISPLAY.get(t.get("button", ""), "?")
+    if ttype == "key":
+        return scancodeLabel(t.get("code", 0), t.get("e0", False))
+    return "—"
 
 
 class _StatusDot(QWidget):
@@ -78,6 +89,7 @@ class RecoilPanel(Panel):
     _rfTrigLiveUpdate  = Signal(str)   # live display during RF trigger capture
     _rfTrigCapFinished = Signal(list)  # final combo when RF trigger released
     _slotCaptureDone   = Signal()      # slot key capture done
+    _toggleCaptureDone = Signal()      # toggle key capture done
 
     def __init__(self, parent, settings: dict, engine, onSettingsChanged):
         super().__init__(parent)
@@ -99,19 +111,20 @@ class RecoilPanel(Panel):
         # still shouldn't silently keep the old binding on driver failure.
         self._captureFailed       = False
         self._rfTrigCaptureFailed = False
-        # Prompt text/label for the capture currently in progress (weapon
-        # or RF slot) — used to redraw the "still listening" prompt after
-        # a rejection flash message if a re-armed capture is still running.
-        self._activeCapturePrompt = None
-        self._activeCaptureLabel  = None
 
         self._weaponCapture = False   # True when slot capture is for a weapon (not RF slot)
+
+        self._toggleCapturing       = False   # toggle key capture
+        self._toggleCaptureCallback = None
+        self._toggleCaptureResult   = None
+        self._toggleCaptureFailed   = False
 
         self._liveUpdate.connect(self._onLiveUpdate)
         self._captureFinished.connect(self._finishCapture)
         self._rfTrigLiveUpdate.connect(self._onRfTrigLiveUpdate)
         self._rfTrigCapFinished.connect(self._finishRfTrigCapture)
         self._slotCaptureDone.connect(self._onSlotCaptureDone)
+        self._toggleCaptureDone.connect(self._onToggleCaptureDone)
 
         self._build()
 
@@ -127,6 +140,8 @@ class RecoilPanel(Panel):
         self._buildRecoilSection()
         self._layout.addWidget(_sep())
         self._buildRfSection()
+        self._layout.addWidget(_sep())
+        self._buildTogglesSection()
 
     def _buildRecoilSection(self):
         s = self._settings["recoil"]
@@ -315,6 +330,44 @@ class RecoilPanel(Panel):
 
         self._refreshSlotRows()
 
+    def _buildTogglesSection(self):
+        # Title (no enabled switch here — each row has its own, like macros)
+        toggleTitle = QLabel("Toggles")
+        toggleTitle.setStyleSheet(f"color: {theme.ACCENT}; font: bold 10pt 'Segoe UI';"
+                                   f" padding: 6px 10px 2px 10px;")
+        self._layout.addWidget(toggleTitle)
+
+        hint = QLabel("Convert a key/button's hold behavior into a toggle.")
+        hint.setStyleSheet(f"color: {theme.DIM}; font: 8pt 'Segoe UI'; padding: 0px 10px 4px 10px;")
+        hint.setWordWrap(True)
+        self._layout.addWidget(hint)
+
+        self._toggleWidget = QWidget()
+        self._toggleWidget.setStyleSheet(f"background-color: {theme.PANEL_BG};")
+        self._toggleLayout = QVBoxLayout(self._toggleWidget)
+        self._toggleLayout.setContentsMargins(10, 0, 10, 0)
+        self._toggleLayout.setSpacing(1)
+        self._layout.addWidget(self._toggleWidget)
+
+        self._toggleEmptyLabel = QLabel("No toggles yet.")
+        self._toggleEmptyLabel.setStyleSheet(
+            f"color: {theme.DIM}; font: italic 9pt 'Segoe UI'; padding: 2px 10px;")
+        self._layout.addWidget(self._toggleEmptyLabel)
+
+        self._toggleCaptureLabel = QLabel("")
+        self._toggleCaptureLabel.setStyleSheet(_captureLabelStyleNormal())
+        self._toggleCaptureLabel.setVisible(False)
+        self._layout.addWidget(self._toggleCaptureLabel)
+
+        addToggleBtn = QPushButton("+ Add Toggle")
+        addToggleBtn.setStyleSheet(
+            f"text-align: left; padding: 3px 10px; margin: 4px 10px 8px 10px;")
+        addToggleBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        addToggleBtn.clicked.connect(self._startAddToggle)
+        self._layout.addWidget(addToggleBtn)
+
+        self._refreshToggleRows()
+
     # ------------------------------------------------------------------
     # Weapon rows
     # ------------------------------------------------------------------
@@ -372,7 +425,7 @@ class RecoilPanel(Panel):
         self._weaponLayout.addWidget(row)
 
     def _editWeaponKey(self, w: dict, btn: QPushButton):
-        if self._slotCapturing or self._capturing or self._rfTrigCapturing:
+        if self._slotCapturing or self._capturing or self._rfTrigCapturing or self._toggleCapturing:
             return
         prompt = "Press weapon key..."
 
@@ -381,13 +434,7 @@ class RecoilPanel(Panel):
                 return
             conflict = keybind_conflicts.findConflict(
                 self._settings, result, exclude_id=f"weapon:{id(w)}")
-            if conflict:
-                # Re-arm immediately so the very next key press is
-                # captured and checked again, instead of dropping out of
-                # capture mode.
-                self._flashCaptureLabel(
-                    self._weaponCaptureLabel, conflict,
-                    rearm=lambda: self._startWeaponCapture(prompt, callback, reprompt=False))
+            if conflict and not self._confirmConflict(_slotKeyLabel(result), conflict):
                 return
             sy = w.get("strength_y", 5)
             w.clear()
@@ -410,21 +457,16 @@ class RecoilPanel(Panel):
         self._onSettingsChanged(self._settings)
 
     def _startAddWeapon(self):
-        if self._slotCapturing or self._capturing or self._rfTrigCapturing:
+        if self._slotCapturing or self._capturing or self._rfTrigCapturing or self._toggleCapturing:
             return
         prompt = "Press weapon key (Esc = no key)..."
 
         def callback(result):
             if result:
                 conflict = keybind_conflicts.findConflict(self._settings, result)
-                if conflict:
-                    # Re-arm immediately so the very next key press is
-                    # captured and checked again, instead of dropping out
-                    # of capture mode. Esc still works as before once
-                    # re-armed (adds the weapon with no keybind).
-                    self._flashCaptureLabel(
-                        self._weaponCaptureLabel, conflict,
-                        rearm=lambda: self._startWeaponCapture(prompt, callback, reprompt=False))
+                if conflict and not self._confirmConflict(_slotKeyLabel(result), conflict):
+                    # User declined — don't add the weapon at all; they can
+                    # click "+" again to retry.
                     return
                 new_w = dict(result)
                 new_w["strength_y"] = 5
@@ -437,20 +479,14 @@ class RecoilPanel(Panel):
 
         self._startWeaponCapture(prompt, callback)
 
-    def _startWeaponCapture(self, prompt: str, callback, reprompt: bool = True):
+    def _startWeaponCapture(self, prompt: str, callback):
         self._slotCapturing       = True
         self._weaponCapture       = True
-        self._activeCapturePrompt = prompt
-        self._activeCaptureLabel  = self._weaponCaptureLabel
         self._slotCaptureCallback = callback
         self._slotCaptureResult   = None
-        if reprompt:
-            # Skipped when re-arming right after a rejection flash — the
-            # flash message is already showing and should stay visible for
-            # its full duration instead of being immediately overwritten.
-            self._weaponCaptureLabel.setText(prompt)
-            self._weaponCaptureLabel.setStyleSheet(_captureLabelStyleNormal())
-            self._weaponCaptureLabel.setVisible(True)
+        self._weaponCaptureLabel.setText(prompt)
+        self._weaponCaptureLabel.setStyleSheet(_captureLabelStyleNormal())
+        self._weaponCaptureLabel.setVisible(True)
         self._engine.setSuspendHotkeys(True)
         threading.Thread(target=self._weaponCaptureThread, daemon=True).start()
 
@@ -458,6 +494,7 @@ class RecoilPanel(Panel):
         result = None
         escaped = False
         failed = False
+        inter = None
         try:
             inter = bringUpInterception(
                 lambda i: (
@@ -502,6 +539,7 @@ class RecoilPanel(Panel):
         finally:
             self._slotCapturing = False
             self._engine.setSuspendHotkeys(False)
+            destroyInterception(inter)
 
         self._slotCaptureFailed = failed
         self._slotCaptureResult = result  # None on Esc = no keybind weapon
@@ -579,7 +617,7 @@ class RecoilPanel(Panel):
     # ------------------------------------------------------------------
 
     def _editSlotKey(self, sk: dict, btn: QPushButton):
-        if self._slotCapturing or self._capturing or self._rfTrigCapturing:
+        if self._slotCapturing or self._capturing or self._rfTrigCapturing or self._toggleCapturing:
             return
         prompt = "Press slot key..."
 
@@ -588,13 +626,7 @@ class RecoilPanel(Panel):
                 return
             conflict = keybind_conflicts.findConflict(
                 self._settings, result, exclude_id=f"rf_slot:{id(sk)}")
-            if conflict:
-                # Re-arm immediately so the very next key press is
-                # captured and checked again, instead of dropping out of
-                # capture mode.
-                self._flashCaptureLabel(
-                    self._slotCaptureLabel, conflict,
-                    rearm=lambda: self._startSlotCapture(prompt, callback, reprompt=False))
+            if conflict and not self._confirmConflict(_slotKeyLabel(result), conflict):
                 return
             enabled = sk.get("enabled", True)
             sk.clear()
@@ -616,7 +648,7 @@ class RecoilPanel(Panel):
         self._onSettingsChanged(self._settings)
 
     def _startAddSlot(self):
-        if self._slotCapturing or self._capturing or self._rfTrigCapturing:
+        if self._slotCapturing or self._capturing or self._rfTrigCapturing or self._toggleCapturing:
             return
         prompt = "Press weapon slot key..."
 
@@ -624,13 +656,7 @@ class RecoilPanel(Panel):
             if not result:
                 return
             conflict = keybind_conflicts.findConflict(self._settings, result)
-            if conflict:
-                # Re-arm immediately so the very next key press is
-                # captured and checked again, instead of dropping out of
-                # capture mode.
-                self._flashCaptureLabel(
-                    self._slotCaptureLabel, conflict,
-                    rearm=lambda: self._startSlotCapture(prompt, callback, reprompt=False))
+            if conflict and not self._confirmConflict(_slotKeyLabel(result), conflict):
                 return
             new_sk = dict(result)
             new_sk["enabled"] = True
@@ -644,25 +670,20 @@ class RecoilPanel(Panel):
     # Slot key capture
     # ------------------------------------------------------------------
 
-    def _startSlotCapture(self, prompt: str, callback, reprompt: bool = True):
+    def _startSlotCapture(self, prompt: str, callback):
         self._slotCapturing       = True
-        self._activeCapturePrompt = prompt
-        self._activeCaptureLabel  = self._slotCaptureLabel
         self._slotCaptureCallback = callback
         self._slotCaptureResult   = None
-        if reprompt:
-            # Skipped when re-arming right after a rejection flash — the
-            # flash message is already showing and should stay visible for
-            # its full duration instead of being immediately overwritten.
-            self._slotCaptureLabel.setText(prompt)
-            self._slotCaptureLabel.setStyleSheet(_captureLabelStyleNormal())
-            self._slotCaptureLabel.setVisible(True)
+        self._slotCaptureLabel.setText(prompt)
+        self._slotCaptureLabel.setStyleSheet(_captureLabelStyleNormal())
+        self._slotCaptureLabel.setVisible(True)
         self._engine.setSuspendHotkeys(True)
         threading.Thread(target=self._slotCaptureThread, daemon=True).start()
 
     def _slotCaptureThread(self):
         result = None
         failed = False
+        inter = None
         try:
             inter = bringUpInterception(
                 lambda i: (
@@ -704,6 +725,7 @@ class RecoilPanel(Panel):
         finally:
             self._slotCapturing = False
             self._engine.setSuspendHotkeys(False)
+            destroyInterception(inter)
 
         self._slotCaptureFailed = failed
         self._slotCaptureResult = result
@@ -733,35 +755,270 @@ class RecoilPanel(Panel):
             cb(result)
 
     # ------------------------------------------------------------------
-    # Conflict feedback (shared by weapon-slot and RF-slot capture)
+    # Toggle rows
     # ------------------------------------------------------------------
 
-    def _flashCaptureLabel(self, label: QLabel, conflict_with: str, rearm=None):
-        """Show a transient 'already bound' message on a capture-prompt
-        label (self._weaponCaptureLabel / self._slotCaptureLabel), then
-        restore its normal hidden/active style — or, if `rearm` is given,
-        re-arm capture immediately (so the very next key press is captured
-        and checked again) and show the capture prompt again once the
-        flash message's time is up, instead of hiding the label as if
-        capture had silently ended."""
-        label.setText(f"Already bound to {conflict_with}. Try again.")
-        label.setStyleSheet(_captureLabelStyleError())
-        label.setVisible(True)
-        if rearm:
-            rearm()
-        QTimer.singleShot(2200, lambda: self._resetCaptureLabelStyle(label))
+    def _refreshToggleRows(self):
+        while self._toggleLayout.count():
+            item = self._toggleLayout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        toggles = self._settings.get("toggles", [])
+        self._toggleEmptyLabel.setVisible(len(toggles) == 0)
+        for t in toggles:
+            self._addToggleRow(t)
+        QTimer.singleShot(0, lambda: self.window().adjustSize())
 
-    def _resetCaptureLabelStyle(self, label: QLabel):
-        # If a re-armed capture is still running when this timer fires,
-        # keep the prompt visible instead of hiding it — otherwise the
-        # label would disappear while still silently listening for a key.
-        if self._slotCapturing and self._activeCaptureLabel is label:
-            label.setText(self._activeCapturePrompt)
-            label.setStyleSheet(_captureLabelStyleNormal())
-            label.setVisible(True)
-        else:
-            label.setVisible(False)
-            label.setStyleSheet(_captureLabelStyleNormal())
+    def _addToggleRow(self, t: dict):
+        row = QFrame(self._toggleWidget)
+        vl = QVBoxLayout(row)
+        vl.setContentsMargins(0, 3, 0, 3)
+        vl.setSpacing(2)
+
+        # ── Line 1: name (flexible) + enable switch ───────────────────
+        topRow = QWidget(row)
+        tl = QHBoxLayout(topRow)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(4)
+
+        nameEdit = QLineEdit(t.get("name", ""), topRow)
+        nameEdit.setPlaceholderText("Toggle name (optional)")
+        nameEdit.editingFinished.connect(
+            lambda e=nameEdit, tt=t: self._onToggleNameEdited(e, tt))
+        tl.addWidget(nameEdit, stretch=1)
+
+        enableSwitch = theme.ToggleSwitch(topRow, value=t.get("enabled", True))
+        enableSwitch._command = lambda tt=t, sw=enableSwitch: self._onToggleEnabledChanged(tt, sw)
+        tl.addWidget(enableSwitch)
+        vl.addWidget(topRow)
+
+        # ── Line 2: capture button + × ─────────────────────────────────
+        botRow = QWidget(row)
+        bl = QHBoxLayout(botRow)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(4)
+
+        keyBtn = QPushButton(_toggleKeyLabel(t), botRow)
+        keyBtn.setFixedWidth(80)
+        keyBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        keyBtn.clicked.connect(lambda _, tt=t, b=keyBtn: self._editToggleKey(tt, b))
+        bl.addWidget(keyBtn)
+
+        bl.addStretch()
+
+        delBtn = QPushButton("×", botRow)
+        delBtn.setFixedWidth(24)
+        delBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        delBtn.setStyleSheet(
+            f"QPushButton {{ color: #ff6666; background-color: {theme.BTN_BG}; border: none; }}"
+            f"QPushButton:hover {{ background-color: {theme.HOVER_BG}; }}")
+        delBtn.clicked.connect(lambda _, tt=t: self._deleteToggle(tt))
+        bl.addWidget(delBtn)
+
+        vl.addWidget(botRow)
+
+        sep = QFrame(self._toggleWidget)
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {theme.PANEL_BORDER};")
+
+        self._toggleLayout.addWidget(row)
+        self._toggleLayout.addWidget(sep)
+
+    def _onToggleNameEdited(self, edit: QLineEdit, t: dict):
+        name = edit.text().strip()[:64]
+        t["name"] = name
+        edit.setText(name)
+        self._onSettingsChanged(self._settings)
+
+    def _onToggleEnabledChanged(self, t: dict, sw: "theme.ToggleSwitch"):
+        t["enabled"] = sw.get()
+        self._onSettingsChanged(self._settings)
+
+    def _deleteToggle(self, t: dict):
+        toggles = self._settings.get("toggles", [])
+        try:
+            idx = next(i for i, tt in enumerate(toggles) if tt is t)
+            del toggles[idx]
+        except StopIteration:
+            pass
+        self._refreshToggleRows()
+        self._onSettingsChanged(self._settings)
+
+    def _startAddToggle(self):
+        if self._slotCapturing or self._capturing or self._rfTrigCapturing or self._toggleCapturing:
+            return
+        prompt = "Press toggle key..."
+
+        def callback(result):
+            # Unlike weapon-slot capture, a toggle with no captured binding
+            # is meaningless (there's nothing to convert hold->toggle for),
+            # and profiles.py's sanitizer drops any toggle entry lacking an
+            # explicit "key"/"mouse" type anyway — so, like RF slot capture,
+            # simply do nothing (no row added) rather than committing a
+            # binding-less entry the user would see silently vanish later.
+            if not result:
+                return
+            conflict = keybind_conflicts.findConflict(self._settings, result)
+            if conflict and self._blockProtectedHotkey(_toggleKeyLabel(result), conflict):
+                return
+            if conflict and not self._confirmConflict(_toggleKeyLabel(result), conflict):
+                return
+            new_t = dict(result)
+            new_t["name"]    = ""
+            new_t["enabled"] = True
+            self._settings.setdefault("toggles", []).append(new_t)
+            self._refreshToggleRows()
+            self._onSettingsChanged(self._settings)
+
+        self._startToggleCapture(prompt, callback)
+
+    def _editToggleKey(self, t: dict, btn: QPushButton):
+        if self._slotCapturing or self._capturing or self._rfTrigCapturing or self._toggleCapturing:
+            return
+        prompt = "Press toggle key..."
+
+        def callback(result):
+            if not result:
+                return
+            conflict = keybind_conflicts.findConflict(
+                self._settings, result, exclude_id=f"toggle:{id(t)}")
+            if conflict and self._blockProtectedHotkey(_toggleKeyLabel(result), conflict):
+                return
+            if conflict and not self._confirmConflict(_toggleKeyLabel(result), conflict):
+                return
+            name    = t.get("name", "")
+            enabled = t.get("enabled", True)
+            t.clear()
+            t.update(result)
+            t["name"]    = name
+            t["enabled"] = enabled
+            btn.setText(_toggleKeyLabel(t))
+            self._onSettingsChanged(self._settings)
+
+        self._startToggleCapture(prompt, callback)
+
+    # ------------------------------------------------------------------
+    # Toggle key capture
+    # ------------------------------------------------------------------
+
+    def _startToggleCapture(self, prompt: str, callback):
+        self._toggleCapturing       = True
+        self._toggleCaptureCallback = callback
+        self._toggleCaptureResult   = None
+        self._toggleCaptureLabel.setText(prompt)
+        self._toggleCaptureLabel.setStyleSheet(_captureLabelStyleNormal())
+        self._toggleCaptureLabel.setVisible(True)
+        self._engine.setSuspendHotkeys(True)
+        threading.Thread(target=self._toggleCaptureThread, daemon=True).start()
+
+    def _toggleCaptureThread(self):
+        result = None
+        failed = False
+        inter = None
+        try:
+            inter = bringUpInterception(
+                lambda i: (
+                    i.set_filter(i.is_keyboard, interception.FilterKeyFlag.FILTER_KEY_ALL),
+                    i.set_filter(i.is_mouse, interception.FilterMouseButtonFlag.FILTER_MOUSE_ALL),
+                ),
+                should_continue=lambda: self._toggleCapturing,
+                context="toggle-capture",
+            )
+            if inter is None:
+                failed = True
+            else:
+                while result is None:
+                    idx = inter.await_input(100)
+                    if idx is None or idx >= len(inter._devices):
+                        continue
+                    device = inter._devices[idx]
+                    stroke = device.receive()
+                    if stroke is None:
+                        continue
+
+                    if isinstance(stroke, interception.KeyStroke):
+                        if stroke.flags & interception.KeyFlag.KEY_UP:
+                            result = {
+                                "type": "key",
+                                "code": stroke.code,
+                                "e0":   bool(stroke.flags & interception.KeyFlag.KEY_E0),
+                            }
+                    elif isinstance(stroke, interception.MouseStroke):
+                        # Scroll ticks are deliberately never turned into a
+                        # result here — toggling doesn't apply to an
+                        # instantaneous scroll event, and this capture,
+                        # unlike weapon/RF-slot capture, never offers scroll
+                        # as a selectable binding. Any scroll stroke just
+                        # falls through unhandled and the loop keeps
+                        # waiting for an actual key or mouse-button press.
+                        for name, (down_flag, up_flag) in MOUSE_BUTTON_FLAGS.items():
+                            if stroke.button_flags & up_flag:
+                                result = {"type": "mouse", "button": name}
+                                break
+        finally:
+            self._toggleCapturing = False
+            self._engine.setSuspendHotkeys(False)
+            destroyInterception(inter)
+
+        self._toggleCaptureFailed = failed
+        self._toggleCaptureResult = result
+        self._toggleCaptureDone.emit()
+
+    @Slot()
+    def _onToggleCaptureDone(self):
+        if self._toggleCaptureFailed:
+            self._toggleCaptureFailed   = False
+            self._toggleCaptureCallback = None
+            self._toggleCaptureResult   = None
+            self._toggleCaptureLabel.setText("Capture failed — try again")
+            self._toggleCaptureLabel.setStyleSheet(_captureLabelStyleError())
+            self._toggleCaptureLabel.setVisible(True)
+            QTimer.singleShot(1800, lambda: self._toggleCaptureLabel.setVisible(False))
+            return
+        self._toggleCaptureLabel.setVisible(False)
+        cb     = self._toggleCaptureCallback
+        result = self._toggleCaptureResult
+        self._toggleCaptureCallback = None
+        self._toggleCaptureResult   = None
+        if cb:
+            cb(result)
+
+    # ------------------------------------------------------------------
+    # Conflict feedback (shared by every capture flow on this panel)
+    # ------------------------------------------------------------------
+
+    def _blockProtectedHotkey(self, new_label: str, conflict_with: str) -> bool:
+        """Menu Toggle and Quit are a hard, non-overridable mutual
+        exclusion with toggle bindings too — same rule panels/remapper.py
+        enforces for remap FROM sources (keybind_conflicts.
+        PROTECTED_REMAP_LABELS/isProtectedSourceConflictLabel are generic
+        helpers, not remapper-specific). Returns True if `conflict_with` names one
+        of those two protected hotkeys (and a hard-block message has
+        already been shown), False if the caller should fall through to
+        the normal warn-and-confirm flow via _confirmConflict()."""
+        if conflict_with not in keybind_conflicts.PROTECTED_REMAP_LABELS:
+            return False
+        reserved_for = conflict_with.split(": ", 1)[-1]
+        QMessageBox.warning(
+            self, "Reserved hotkey",
+            f"{new_label} is reserved for {reserved_for} and cannot be "
+            f"used as a toggle key.",
+        )
+        return True
+
+    def _confirmConflict(self, new_label: str, conflict_with: str) -> bool:
+        """A captured binding collides with an existing one — warn the
+        user which binding it's already used for and let them choose
+        whether to keep it anyway. Returns True to keep/commit the new
+        binding, False to discard it (the caller leaves the previous
+        binding, or the not-yet-added item, untouched)."""
+        return QMessageBox.question(
+            self, "Keybind already in use",
+            f"{new_label} is already used for {conflict_with}.\n\n"
+            f"Use it here anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes
 
     # ------------------------------------------------------------------
     # Reload / engine callbacks
@@ -786,6 +1043,12 @@ class RecoilPanel(Panel):
         self._rfHumanizeSwitch.set(rf.get("humanize", False))
         self._rfTrigBtn.setText(theme.comboLabel(rf.get("trigger_keys", ["mouse_left"])))
         self._refreshSlotRows()
+
+        # Toggles — settings["toggles"] is a flat top-level list, already
+        # replaced wholesale (same object identity as self._settings) by
+        # PanelWindow._onProfileLoad() before reload() runs, so there's no
+        # sub-dict to .update() here — just rebuild the rows from it.
+        self._refreshToggleRows()
 
     def updateStrength(self, value: int):
         idx = self._engine.activeWeaponIdx
@@ -879,7 +1142,7 @@ class RecoilPanel(Panel):
     # ------------------------------------------------------------------
 
     def _startCapture(self):
-        if self._capturing or self._rfTrigCapturing or self._slotCapturing:
+        if self._capturing or self._rfTrigCapturing or self._slotCapturing or self._toggleCapturing:
             return
         self._capturing = True
         self._engine.setSuspendHotkeys(True)
@@ -891,6 +1154,7 @@ class RecoilPanel(Panel):
         held: set  = set()
         seen: list = []
         failed = False
+        inter = None
         try:
             inter = bringUpInterception(
                 lambda i: (
@@ -940,6 +1204,7 @@ class RecoilPanel(Panel):
         finally:
             self._capturing = False
             self._engine.setSuspendHotkeys(False)
+            destroyInterception(inter)
 
         self._captureFailed = failed
         # Note: settings["recoil"]["trigger_keys"] is deliberately NOT
@@ -965,17 +1230,10 @@ class RecoilPanel(Panel):
             return
         conflict = keybind_conflicts.findConflict(
             self._settings, combo, exclude_id="recoil_trigger")
-        if conflict:
+        if conflict and not self._confirmConflict(theme.comboLabel(combo), conflict):
             current = self._settings["recoil"]["trigger_keys"]
-            self._keybindBtn.setText(f"Already used: {conflict}")
-            self._keybindBtn.setStyleSheet("color: #ff6666;")
-            # Re-arm immediately so the next combo the user holds is
-            # captured and checked again, without needing another click.
-            self._capturing = True
-            self._engine.setSuspendHotkeys(True)
-            threading.Thread(target=self._captureThread, daemon=True).start()
-            QTimer.singleShot(1800, lambda: self._revertTriggerBtn(
-                self._keybindBtn, current, lambda: self._capturing))
+            self._keybindBtn.setText(theme.comboLabel(current))
+            self._keybindBtn.setStyleSheet("")
             return
         self._settings["recoil"]["trigger_keys"] = combo
         self._keybindBtn.setText(theme.comboLabel(combo))
@@ -999,7 +1257,7 @@ class RecoilPanel(Panel):
     # ------------------------------------------------------------------
 
     def _startRfTrigCapture(self):
-        if self._rfTrigCapturing or self._capturing or self._slotCapturing:
+        if self._rfTrigCapturing or self._capturing or self._slotCapturing or self._toggleCapturing:
             return
         self._rfTrigCapturing = True
         self._engine.setSuspendHotkeys(True)
@@ -1011,6 +1269,7 @@ class RecoilPanel(Panel):
         held: set  = set()
         seen: list = []
         failed = False
+        inter = None
         try:
             inter = bringUpInterception(
                 lambda i: (
@@ -1061,6 +1320,7 @@ class RecoilPanel(Panel):
         finally:
             self._rfTrigCapturing = False
             self._engine.setSuspendHotkeys(False)
+            destroyInterception(inter)
 
         self._rfTrigCaptureFailed = failed
         # Settings are written in _finishRfTrigCapture() (main thread) only
@@ -1084,17 +1344,10 @@ class RecoilPanel(Panel):
             return
         conflict = keybind_conflicts.findConflict(
             self._settings, combo, exclude_id="rf_trigger")
-        if conflict:
+        if conflict and not self._confirmConflict(theme.comboLabel(combo), conflict):
             current = self._settings.get("rapidfire", {}).get("trigger_keys", ["mouse_left"])
-            self._rfTrigBtn.setText(f"Already used: {conflict}")
-            self._rfTrigBtn.setStyleSheet("color: #ff6666;")
-            # Re-arm immediately so the next combo the user holds is
-            # captured and checked again, without needing another click.
-            self._rfTrigCapturing = True
-            self._engine.setSuspendHotkeys(True)
-            threading.Thread(target=self._rfTrigCaptureThread, daemon=True).start()
-            QTimer.singleShot(1800, lambda: self._revertTriggerBtn(
-                self._rfTrigBtn, current, lambda: self._rfTrigCapturing))
+            self._rfTrigBtn.setText(theme.comboLabel(current))
+            self._rfTrigBtn.setStyleSheet("")
             return
         self._settings.setdefault("rapidfire", {})["trigger_keys"] = combo
         self._rfTrigBtn.setText(theme.comboLabel(combo))

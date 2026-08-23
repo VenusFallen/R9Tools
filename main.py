@@ -33,6 +33,19 @@ from crash_logging import setup_logging
 # prints "Interception successfully installed. You must reboot for it to
 # take effect." every time it runs. See R9Tools.iss's NeedRestart()
 # handling for the installer-side half of this fix.
+#
+# DESIGN (2026-08-22, quit-time system-wide input freeze investigation):
+# these driver SERVICES are now meant to stay loaded/running permanently
+# once installed, for the lifetime of the machine session -- R9Tools no
+# longer stops them on quit (see the removed stop-on-quit call, below in
+# main()). Interception is a no-op passthrough at the driver level when no
+# process has an open, filtered device handle against it: leaving the
+# service running while R9Tools isn't even open has no behavioral effect on
+# the rest of the system. What actually determines whether system input is
+# captured is RecoilEngine's own open device handles (see recoil.py,
+# RecoilEngine.stop()/_destroyInterception()) -- closing those is a fast,
+# in-process operation, not a slow PnP-level driver detach, and is what
+# fixed the ~1s system-wide input freeze previously seen on every quit.
 _INTERCEPTION_SERVICES = ["keyboard", "mouse"]
 
 
@@ -60,7 +73,17 @@ def _interception_driver(start: bool) -> None:
     all, which made a missing/not-yet-loaded driver (e.g. right after a
     fresh install, before the required reboot) completely invisible from
     the app's own log, forcing manual `sc query` investigation to even
-    notice the driver wasn't there."""
+    notice the driver wasn't there.
+
+    Only ever called with start=True now (once, at launch, as a fast,
+    idempotent safety net in case the driver isn't already running for
+    some reason -- ERROR_SERVICE_ALREADY_RUNNING makes a repeat `sc start`
+    on an already-running service cheap and harmless). The driver services
+    are deliberately never stopped from here anymore -- see the DESIGN
+    comment above _INTERCEPTION_SERVICES for why -- but the start=False
+    path is kept rather than deleted, since stopping the driver services
+    is still a legitimate thing for a future explicit uninstall/cleanup
+    flow to need."""
     action = "start" if start else "stop"
     for svc in _INTERCEPTION_SERVICES:
         result = subprocess.run(
@@ -100,7 +123,7 @@ from panel_window import PanelWindow
 # update-check runs, so it never competes with driver init / engine start /
 # overlay start for startup time — those all happen synchronously above,
 # before app.exec() is ever called.
-_AUTO_UPDATE_CHECK_DELAY_MS = 5000
+_AUTO_UPDATE_CHECK_DELAY_MS = 2000
 
 # Holds the live "Downloading update..." QMessageBox (if any) so it isn't
 # garbage-collected out from under itself: it's a parentless top-level
@@ -290,25 +313,21 @@ def main():
     # panel_win starts hidden; overlay hotkey shows/hides it
     app.exec()
 
-    # engine.stop() joins RecoilEngine's own threads, including the
-    # _listenLoop thread that is the ONLY thing forwarding system-wide
-    # keyboard/mouse input through to the OS while the Interception kernel
-    # filter driver is active (it filters ALL input system-wide, not just
-    # input meant for R9Tools — see _interception_driver above). Once that
-    # thread is dead, the driver is still capturing every keystroke/mouse
-    # move with nothing left to forward it anywhere, so the whole system's
-    # input appears to lock up until the driver services are actually
-    # stopped below. Release the driver immediately after engine.stop()
-    # returns, rather than waiting on macro_engine/stats_poller/dx_overlay
-    # teardown first — none of those subsystems touch the interception
-    # driver, so there's no reason the system-wide input lockup window
-    # should include their (unrelated, sometimes multi-hundred-ms) shutdown
-    # time. Measured impact: stats_poller.stop() alone can block for up to
-    # a full poll interval (~0.2-2s depending on the configured stats
-    # update rate) because its poll loop sleeps in one uninterruptible
-    # `time.sleep()` call per cycle — see stats_poller.py.
+    # engine.stop() now destroys RecoilEngine's own Interception context
+    # (closing its open, filtered keyboard/mouse device handles) as the
+    # FIRST thing it does, before joining any of its threads — see
+    # RecoilEngine.stop()/_destroyInterception() in recoil.py. That's what
+    # actually releases system-wide input, not the driver SERVICE being
+    # stopped: the driver deliberately stays loaded/running across app
+    # sessions now (see _INTERCEPTION_SERVICES comment above), and closing
+    # this process's device handles is what determines whether the driver
+    # has anything to capture. There is deliberately no
+    # `_interception_driver(start=False)` call here anymore — stopping the
+    # driver service on quit was the slow, ~1s, PnP-level operation
+    # previously responsible for the system-wide keyboard/mouse freeze
+    # testers reported when closing the app; it is no longer part of the
+    # quit path at all.
     engine.stop()
-    _interception_driver(start=False)
 
     macro_engine.stop()
     stats_poller.stop()

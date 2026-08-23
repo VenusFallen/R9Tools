@@ -127,10 +127,10 @@ class _TopBarWindow(QWidget):
         QApplication.instance().installNativeEventFilter(self._displayFilter)
 
     def _build(self):
-        for label, index in [("WEAPON",   _TAB_RECOIL),
-                              ("OVERLAY",  _TAB_OVERLAY),
+        for label, index in [("CONTROLS", _TAB_RECOIL),
+                              ("MACROS",   _TAB_MACROS),
                               ("REMAPPER", _TAB_REMAPPER),
-                              ("MACROS",   _TAB_MACROS)]:
+                              ("OVERLAY",  _TAB_OVERLAY)]:
             self._barLayout.addWidget(self._makeTabButton(label, index))
 
         self._barLayout.addStretch()

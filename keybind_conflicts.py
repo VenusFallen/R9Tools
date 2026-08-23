@@ -3,10 +3,10 @@ Shared keybind-conflict detection.
 
 Every place in the app where the user captures a key / mouse-button /
 scroll-direction binding (recoil trigger, recoil weapon slots, rapid-fire
-trigger, rapid-fire slots, remapper FROM sources, macro triggers, global
-hotkeys) should hard-block a capture that collides with a binding already
-used somewhere else, rather than silently allowing the same physical key to
-be double-booked. Double-booking used to be possible and is exactly what
+trigger, rapid-fire slots, remapper FROM sources, macro triggers,
+hold-to-toggle bindings, global hotkeys) should hard-block a capture that
+collides with a binding already used somewhere else, rather than silently
+allowing the same physical key to be double-booked. Double-booking used to be possible and is exactly what
 produced undocumented "last branch wins" behaviour in recoil.py's stroke
 handling (e.g. a key bound to both an RF slot and a remap source would never
 reach the remapper, since the RF slot check runs first and returns early).
@@ -166,10 +166,48 @@ def iterBindingSources(settings: dict):
         yield (f"macro_trigger:{id(macro)}", f"Macro: {name}",
                bindingSignatures(macro.get("trigger", {})))
 
+    for t in settings.get("toggles", []) or []:
+        label = t.get("name") or _remapInputLabel(t)
+        yield (f"toggle:{id(t)}", f"Toggle: {label}", bindingSignatures(t))
+
     hotkeys = settings.get("hotkeys", {}) or {}
     for name, bind in hotkeys.items():
         display = _HOTKEY_DISPLAY.get(name, name)
         yield (f"hotkey:{name}", f"Hotkey: {display}", bindingSignatures(bind))
+
+
+def hotkeyLabel(name: str) -> str:
+    """Build the exact label iterBindingSources() yields for a hotkey
+    settings key (e.g. "overlay_toggle" -> "Hotkey: Menu Toggle")."""
+    return f"Hotkey: {_HOTKEY_DISPLAY.get(name, name)}"
+
+
+# Hotkeys that must stay in a hard, non-overridable mutual exclusion with
+# the remapper's FROM sources and toggle bindings, in both directions:
+# they're the user's "escape hatch" out of a bad remap/recoil/toggle state,
+# so unlike every other conflict type (which is warn-and-confirm), colliding
+# with either of these can never be confirmed through — it's always
+# reverted. Every other hotkey (recoil_toggle, recoil_strength_up/down)
+# uses the normal warn-and-confirm flow like any other binding.
+PROTECTED_REMAP_HOTKEYS = ("overlay_toggle", "quit")
+
+# The exact conflict labels findConflict() returns when a candidate
+# binding collides with one of the protected hotkeys above. Computed from
+# _HOTKEY_DISPLAY rather than hardcoded so it always matches whatever
+# iterBindingSources() actually yields.
+PROTECTED_REMAP_LABELS = {hotkeyLabel(name) for name in PROTECTED_REMAP_HOTKEYS}
+
+
+def isProtectedSourceConflictLabel(label) -> bool:
+    """True if `label` (as returned by findConflict()) identifies a
+    collision with an existing remapper mapping's FROM source or an
+    existing toggle binding, i.e. it was built from either the
+    "Remap: {fromLabel} -> {toLabel}" or "Toggle: {name}" template in
+    iterBindingSources(). Menu Toggle / Quit hard-block on both of these
+    source types (see PROTECTED_REMAP_HOTKEYS above)."""
+    return isinstance(label, str) and (
+        label.startswith("Remap:") or label.startswith("Toggle:")
+    )
 
 
 def findConflict(settings: dict, binding, exclude_id=None):
@@ -185,10 +223,16 @@ def findConflict(settings: dict, binding, exclude_id=None):
     itself. An empty/unset candidate binding never conflicts with anything.
 
     Note: global hotkeys (Menu Toggle, Quit, Recoil Toggle, Strength +/-)
-    always have a concrete binding, so this naturally also implements the
-    "protected hotkeys can't be used as remap sources" rule — no separate
-    check is needed, a remap-FROM capture landing on the Menu Toggle or
-    Quit key will be reported as "Hotkey: Menu Toggle" / "Hotkey: Quit".
+    always have a concrete binding, so a remap-FROM or toggle capture
+    landing on any of them is naturally reported as e.g. "Hotkey: Menu
+    Toggle" / "Hotkey: Quit" / "Hotkey: Recoil Toggle" without any
+    special-casing here. Callers decide what to do with that label: most
+    conflicts (including Recoil Toggle / Strength +/-) are warn-and-confirm,
+    but Menu Toggle and Quit specifically are a hard, non-overridable mutual
+    exclusion with the remapper's FROM sources and toggle bindings, in both
+    directions — see PROTECTED_REMAP_LABELS / isProtectedSourceConflictLabel()
+    above, used by panels/remapper.py, panels/recoil.py, and theme.py's
+    KeybindButton respectively.
     """
     candidate = set(bindingSignatures(binding))
     if not candidate:

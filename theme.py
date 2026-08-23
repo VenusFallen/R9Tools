@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QTimer, QPoint, Signal, Slot
 from PySide6.QtGui  import QPainter, QColor
 from PySide6.QtWidgets import (
     QWidget, QFrame, QHBoxLayout, QVBoxLayout,
-    QPushButton, QLabel, QLineEdit,
+    QPushButton, QLabel, QLineEdit, QMessageBox,
 )
 
 # ---------------------------------------------------------------------------
@@ -473,8 +473,9 @@ class KeybindButton(QWidget):
     def _captureThread(self):
         import interception as _ic
         from recoil import MOUSE_BUTTON_FLAGS, _SCROLL_WHEEL_FLAG
-        from interception_bringup import bringUpInterception
+        from interception_bringup import bringUpInterception, destroyInterception
 
+        inter = None
         try:
             def _configure(i):
                 i.set_filter(i.is_keyboard, _ic.FilterKeyFlag.FILTER_KEY_ALL)
@@ -531,6 +532,7 @@ class KeybindButton(QWidget):
                             break
         finally:
             self._capturing = False
+            destroyInterception(inter)
             if self._onCapture:
                 self._onCapture(False)
             self._done.emit()   # → _finish() on main thread
@@ -544,23 +546,48 @@ class KeybindButton(QWidget):
             QTimer.singleShot(1800, self._revertFailedLabel)
             return
         if self._captureSuccess and self._settings is not None:
-            from keybind_conflicts import findConflict
-            conflict = findConflict(self._settings, self._binding, self._exclude_id)
+            import keybind_conflicts
+            conflict = keybind_conflicts.findConflict(
+                self._settings, self._binding, self._exclude_id)
             if conflict:
-                # Hard-block: discard the newly captured binding, revert to
-                # what was bound before this capture, flash why, and
-                # immediately re-arm capture so the user can just press
-                # another key without clicking the button again.
-                self._binding        = self._previousBinding
-                self._captureSuccess = False
-                self._btn.setText(f"Already used: {conflict}")
-                self._btn.setStyleSheet("color: #ff6666;")
-                self._capturing = True
-                if self._onCapture:
-                    self._onCapture(True)
-                threading.Thread(target=self._captureThread, daemon=True).start()
-                QTimer.singleShot(1800, self._revertConflictMessage)
-                return
+                newLabel = self._bindingLabel()
+                # Menu Toggle and Quit (exclude_id "hotkey:overlay_toggle" /
+                # "hotkey:quit") are a hard, non-overridable mutual
+                # exclusion with remapper FROM sources and toggle bindings
+                # specifically — if the new binding is already used as a
+                # remap source or a toggle, revert immediately with no
+                # dialog choice. Any other conflict for these two buttons
+                # (or any conflict at all for the other three hotkey
+                # buttons) still goes through the normal warn-and-confirm
+                # flow below.
+                if (self._exclude_id in ("hotkey:overlay_toggle", "hotkey:quit")
+                        and keybind_conflicts.isProtectedSourceConflictLabel(conflict)):
+                    usedBy = ("the remapper" if conflict.startswith("Remap:")
+                              else "a toggle")
+                    QMessageBox.warning(
+                        self, "Keybind already in use",
+                        f"{newLabel} cannot be used here: the new binding "
+                        f"is already used by {usedBy}.",
+                    )
+                    self._binding        = self._previousBinding
+                    self._captureSuccess = False
+                else:
+                    # No longer a hard-block for every other conflict type:
+                    # warn the user which other binding already uses this
+                    # key/button and let them decide whether to keep the
+                    # new binding anyway or revert to what was bound before
+                    # this capture. Either way we fall through to the
+                    # normal commit/label-refresh logic below.
+                    keep = QMessageBox.question(
+                        self, "Keybind already in use",
+                        f"{newLabel} is already used for {conflict}.\n\n"
+                        f"Use it here anyway?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No,
+                    ) == QMessageBox.StandardButton.Yes
+                    if not keep:
+                        self._binding        = self._previousBinding
+                        self._captureSuccess = False
         self._btn.setText(self._bindingLabel())
         self._btn.setStyleSheet("")
         if self._captureSuccess:
@@ -569,16 +596,3 @@ class KeybindButton(QWidget):
     def _revertFailedLabel(self):
         self._btn.setText(self._bindingLabel())
         self._btn.setStyleSheet("")
-
-    def _revertConflictMessage(self):
-        # If the re-armed capture (started right after the conflict) is
-        # still running when this timer fires, show the capture prompt
-        # instead of the bound label — otherwise the button would flash
-        # back to looking "done" while still silently listening for a key.
-        if self._capturing:
-            prompt = "Press a key..." if self._keyboard_only else "Press key or button..."
-            self._btn.setText(prompt)
-            self._btn.setStyleSheet(f"color: {ACTIVE_FG};")
-        else:
-            self._btn.setText(self._bindingLabel())
-            self._btn.setStyleSheet("")

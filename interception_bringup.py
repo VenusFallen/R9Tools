@@ -111,3 +111,28 @@ def bringUpInterception(configure, attempts=DEFAULT_ATTEMPTS,
         context, attempts, lastErr,
     )
     return None
+
+
+def destroyInterception(inter):
+    """Tear down an interception.Interception() context returned by
+    bringUpInterception(), releasing its filtered device handles.
+
+    Safe to call with inter=None (e.g. when bringUpInterception() itself
+    failed and returned None) and safe to call more than once on the same
+    context — any exception raised by destroy() (including on an
+    already-torn-down context) is swallowed, since by this point the
+    caller is unwinding and there is nothing useful to do with the error
+    besides leaving the process in whatever state it's already in.
+
+    Every foreground capture site that calls bringUpInterception() must
+    call this exactly once, unconditionally, in its finally block once it
+    is done reading from the context — otherwise the filtered handle is
+    left open (and capturing matching strokes) for the rest of the
+    process's lifetime.
+    """
+    if inter is None:
+        return
+    try:
+        inter.destroy()
+    except Exception:
+        pass

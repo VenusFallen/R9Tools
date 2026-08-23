@@ -3,14 +3,14 @@ import interception
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
 import theme
 import keybind_conflicts
 from panels.base import Panel
 from recoil import MOUSE_BUTTON_FLAGS, _SCROLL_WHEEL_FLAG, scancodeLabel
-from interception_bringup import bringUpInterception
+from interception_bringup import bringUpInterception, destroyInterception
 
 _FROM_PROMPT = "FROM: Press any key or button..."
 
@@ -49,10 +49,6 @@ class RemapperPanel(Panel):
         self._pendingCallback   = None
         self._pendingResult     = None
         self._pendingFailed     = False
-        # Prompt for the capture currently in progress — used to redraw
-        # the "still listening" prompt after a rejection flash message if
-        # a re-armed capture is still running.
-        self._activeCapturePrompt = None
 
         self._captureDone.connect(self._onCaptureDone)
         self._build()
@@ -199,22 +195,10 @@ class RemapperPanel(Panel):
     def _onFromCaptured(self, inp: dict):
         if inp is None:
             return
-        # Conflict check doubles as the "protected hotkeys can't be remap
-        # sources" rule: Menu Toggle / Quit always have a concrete binding
-        # in settings["hotkeys"] and are registered as ordinary conflict
-        # sources (see keybind_conflicts.iterBindingSources), so capturing
-        # either of their keys here is reported the same way any other
-        # collision would be — one consistent code path instead of a
-        # bespoke protected-key check.
         conflict = keybind_conflicts.findConflict(self._settings, inp)
-        if conflict:
-            # Re-arm immediately so the very next key press is captured
-            # and checked again, instead of dropping out of capture mode.
-            self._flashConflict(
-                conflict,
-                rearm=lambda: self._startCapture(
-                    _FROM_PROMPT, self._onFromCaptured,
-                    allow_scroll=True, reprompt=False))
+        if conflict and self._blockProtectedHotkey(_inputLabel(inp), conflict):
+            return
+        if conflict and not self._confirmConflict(_inputLabel(inp), conflict):
             return
         self._pendingFrom = inp
         self._startCapture("TO: Press any key or button (or scroll)...",
@@ -234,15 +218,9 @@ class RemapperPanel(Panel):
             return
         conflict = keybind_conflicts.findConflict(
             self._settings, inp, exclude_id=f"remap_from:{id(mapping)}")
-        if conflict:
-            # Re-arm immediately so the very next key press is captured
-            # and checked again, instead of dropping out of capture mode.
-            self._flashConflict(
-                conflict,
-                rearm=lambda: self._startCapture(
-                    _FROM_PROMPT,
-                    lambda inp: self._onEditFromCaptured(mapping, inp),
-                    allow_scroll=True, reprompt=False))
+        if conflict and self._blockProtectedHotkey(_inputLabel(inp), conflict):
+            return
+        if conflict and not self._confirmConflict(_inputLabel(inp), conflict):
             return
         mappings = self._settings["remapper"]["mappings"]
         if any(m is mapping for m in mappings):
@@ -250,36 +228,38 @@ class RemapperPanel(Panel):
             self._refreshMappingRows()
             self._onSettingsChanged(self._settings)
 
-    def _flashConflict(self, conflict_with: str, rearm=None):
-        """Transient hard-block message on the capture-prompt label — the
-        captured binding is discarded and, if `rearm` is given, capture is
-        re-armed immediately so the very next key press is captured and
-        checked again (the prompt reappears once the flash message's time
-        is up), instead of leaving the user to click FROM again."""
-        self._captureLabel.setText(f"Already bound to {conflict_with}. Try again.")
-        self._captureLabel.setStyleSheet(
-            f"color: #ff6666; font: italic 9pt 'Segoe UI';"
-            f" padding: 0px 10px 4px 10px;")
-        self._captureLabel.setVisible(True)
-        if rearm:
-            rearm()
-        QTimer.singleShot(2200, self._resetCaptureLabel)
+    def _blockProtectedHotkey(self, new_label: str, conflict_with: str) -> bool:
+        """Menu Toggle and Quit are a hard, non-overridable mutual
+        exclusion with remapper FROM sources — unlike every other conflict
+        type (warn-and-confirm via _confirmConflict), a capture landing on
+        either of them is always reverted, no dialog choice offered.
+        Returns True if `conflict_with` names one of those two protected
+        hotkeys (and a hard-block message has already been shown), False
+        if the caller should fall through to the normal confirm flow."""
+        if conflict_with not in keybind_conflicts.PROTECTED_REMAP_LABELS:
+            return False
+        reserved_for = conflict_with.split(": ", 1)[-1]
+        QMessageBox.warning(
+            self, "Reserved hotkey",
+            f"{new_label} is reserved for {reserved_for} and cannot be "
+            f"used as a remap source.",
+        )
+        return True
 
-    def _resetCaptureLabel(self):
-        # If a re-armed capture is still running when this timer fires,
-        # keep the prompt visible instead of hiding it — otherwise the
-        # label would disappear while still silently listening for a key.
-        if self._capturing and self._activeCapturePrompt:
-            self._captureLabel.setText(self._activeCapturePrompt)
-            self._captureLabel.setStyleSheet(
-                f"color: {theme.ACTIVE_FG}; font: italic 9pt 'Segoe UI';"
-                f" padding: 0px 10px 4px 10px;")
-            self._captureLabel.setVisible(True)
-        else:
-            self._captureLabel.setVisible(False)
-            self._captureLabel.setStyleSheet(
-                f"color: {theme.ACTIVE_FG}; font: italic 9pt 'Segoe UI';"
-                f" padding: 0px 10px 4px 10px;")
+    def _confirmConflict(self, new_label: str, conflict_with: str) -> bool:
+        """A captured binding collides with an existing one — warn the
+        user which binding it's already used for and let them choose
+        whether to keep it anyway. Returns True to keep/commit the new
+        binding, False to discard it. Menu Toggle / Quit conflicts never
+        reach here — see _blockProtectedHotkey(), called first in
+        _onFromCaptured / _onEditFromCaptured."""
+        return QMessageBox.question(
+            self, "Keybind already in use",
+            f"{new_label} is already used for {conflict_with}.\n\n"
+            f"Use it here anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes
 
     def _onEditToCaptured(self, mapping: dict, inp: dict):
         if inp is None:
@@ -304,26 +284,21 @@ class RemapperPanel(Panel):
     # Input capture
     # ------------------------------------------------------------------
 
-    def _startCapture(self, prompt: str, callback, allow_scroll: bool = False,
-                       reprompt: bool = True):
-        self._capturing           = True
-        self._pendingCallback     = callback
-        self._activeCapturePrompt = prompt
-        if reprompt:
-            # Skipped when re-arming right after a rejection flash — the
-            # flash message is already showing and should stay visible for
-            # its full duration instead of being immediately overwritten.
-            self._captureLabel.setText(prompt)
-            self._captureLabel.setStyleSheet(
-                f"color: {theme.ACTIVE_FG}; font: italic 9pt 'Segoe UI';"
-                f" padding: 0px 10px 4px 10px;")
-            self._captureLabel.setVisible(True)
+    def _startCapture(self, prompt: str, callback, allow_scroll: bool = False):
+        self._capturing       = True
+        self._pendingCallback = callback
+        self._captureLabel.setText(prompt)
+        self._captureLabel.setStyleSheet(
+            f"color: {theme.ACTIVE_FG}; font: italic 9pt 'Segoe UI';"
+            f" padding: 0px 10px 4px 10px;")
+        self._captureLabel.setVisible(True)
         threading.Thread(target=self._captureThread,
                          args=(allow_scroll,), daemon=True).start()
 
     def _captureThread(self, allow_scroll: bool):
         result = None
         failed = False
+        inter = None
         try:
             inter = bringUpInterception(
                 lambda i: (
@@ -373,6 +348,7 @@ class RemapperPanel(Panel):
                                     break
         finally:
             self._capturing = False
+            destroyInterception(inter)
 
         self._pendingFailed = failed
         self._pendingResult = result  # None: callers already treat this as a no-op

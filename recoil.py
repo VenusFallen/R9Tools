@@ -152,9 +152,38 @@ class RecoilEngine:
                                                 # matching physical up-event must be
                                                 # swallowed rather than passed through
                                                 # (see _tryRemap / updateSettings)
+        self._toggleActive: dict = {}          # sig tuple -> True while a
+                                                # "hold-to-toggle" entry (see
+                                                # settings["toggles"]) is logically ON
+                                                # for that sig — see
+                                                # _lookupToggleTarget/_tryToggleDown
+        self._togglePendingRelease: set = set() # sigs whose active toggle was
+                                                 # force-released by updateSettings()/
+                                                 # stop() while still physically held
+                                                 # — mirrors _remapPendingRelease; the
+                                                 # next matching physical up-event
+                                                 # must be swallowed rather than
+                                                 # passed through (see
+                                                 # _handleMouseStroke/
+                                                 # _handleKeyboardStroke,
+                                                 # updateSettings, stop)
         self._kbDevice = None                  # tracked from listen loop for synthesis
         self._msDevice = None                  # tracked from listen loop for synthesis
         self._xDrift   = 0.0                   # Brownian X drift accumulator
+
+        self._interception     = None          # live Interception context, set by
+                                                 # _listenLoop as soon as bring-up
+                                                 # succeeds; destroyed exactly once by
+                                                 # whichever of stop()/_listenLoop's own
+                                                 # cleanup gets to it first — see
+                                                 # _destroyInterception().
+        self._interceptionLock = threading.Lock()  # guards _interception specifically;
+                                                     # separate from self._lock (which
+                                                     # guards settings/state) so stop()
+                                                     # can destroy the context immediately
+                                                     # without contending with whatever
+                                                     # the listen thread is doing under
+                                                     # self._lock at that instant.
 
         self._rfArmed        = False   # True when weapon slot key has been toggled on
         self._lastRfArmToggleTime = None  # time.monotonic() of last accepted slot-key
@@ -210,9 +239,74 @@ class RecoilEngine:
 
     def stop(self):
         self._running = False
+        # Force-release any "hold-to-toggle" entry left logically ON so it
+        # doesn't get stuck held down in whatever app/game has focus once
+        # R9Tools quits and stops listening for input entirely — the user's
+        # actual physical key isn't necessarily being held right now (that
+        # is the whole point of a toggle), so there is no future physical
+        # up-event to rely on to release it. This MUST run before
+        # _destroyInterception() below: the synthesized release needs a
+        # still-live device handle to send through (see _sendSynthesized's
+        # kb/ms device lookup), and self._kbDevice/self._msDevice become
+        # unusable the instant the driver context is torn down.
+        #
+        # An active remap's synthesized-TO input has the exact same
+        # stuck-key exposure: if a remapped-FROM key is physically held
+        # when the app quits, nothing ever sends the synthesized-TO
+        # key/button's up-event, and it's left stuck down in whatever
+        # game/app has focus. Force-release both here, before
+        # _destroyInterception(), for the same still-live-device-handle
+        # reason as the toggle comment above.
+        with self._lock:
+            stuck_toggles = self._forceReleaseActiveToggles_locked()
+            stuck_remaps  = self._forceReleaseActiveRemaps_locked()
+        for sig in stuck_toggles:
+            self._sendSynthesized(self._toggleOwnInput(sig), True, None)
+        for to_input in stuck_remaps.values():
+            if to_input.get("type") != "scroll":
+                self._sendSynthesized(to_input, True, None)
+
+        # Destroy the Interception context FIRST, before any thread joins.
+        # The driver's SERVICE is left running permanently now (see
+        # _interception_driver in main.py/main_imgui.py) — it's a no-op
+        # passthrough with no open, filtered device handle attached to it.
+        # What actually blocks system-wide input the instant _listenLoop's
+        # forwarding thread stops reading is THIS process's own open,
+        # filtered handles sitting there with nothing left to call
+        # receive()/send() on them. Releasing those handles is a fast,
+        # in-process operation — do it immediately, not gated behind
+        # thread-join timeouts (which, worst case, is a full second here).
+        self._destroyInterception()
         self._applyThread.join(timeout=1.0)
         self._listenThread.join(timeout=1.0)
         self._rfThread.join(timeout=1.0)
+
+    def _destroyInterception(self) -> None:
+        """Destroy self._interception exactly once, however it's reached:
+        from stop() (caller/main thread) racing against _listenLoop's own
+        finally-block cleanup (listen thread) when the loop exits on its
+        own. Both paths funnel through here so the actual interception.
+        Interception.destroy() call only ever happens once — calling it
+        twice on the same context is not something to rely on being safe.
+        `_interceptionLock` is a dedicated lock (not self._lock) so stop()
+        can run this without contending with whatever the listen thread
+        might be doing under self._lock at that exact instant (e.g. inside
+        a stroke handler)."""
+        with self._interceptionLock:
+            inter = self._interception
+            self._interception = None
+        if inter is None:
+            return
+        try:
+            inter.destroy()
+        except Exception:
+            # The underlying device handles may already be in a bad state
+            # (e.g. partially torn down) — this is best-effort cleanup, not
+            # something that should ever raise out of stop() or the listen
+            # loop's exit path.
+            logging.getLogger("r9tools.recoil").exception(
+                "Interception.destroy() raised during cleanup"
+            )
 
     def updateSettings(self, settings: dict, full_reset: bool = False):
         """Swap in new settings.
@@ -259,6 +353,34 @@ class RecoilEngine:
             self._remapPendingRelease.update(self._remapActive.keys())
             self._remapActive.clear()
 
+            # Toggles: unlike the remap-active release above (which
+            # unconditionally clears on every call, since a remap's active
+            # state only ever spans the instant a key is physically held),
+            # a toggle's ON state is meant to persist indefinitely — e.g.
+            # toggle-sprint staying engaged while the user tweaks an
+            # unrelated crosshair color setting must NOT get cancelled.
+            # So only force-release a toggle here if either:
+            #   (a) full_reset=True (profile switch — old state has no
+            #       guaranteed relationship to the incoming profile at all,
+            #       exactly like every other full_reset field below), or
+            #   (b) the specific active sig no longer matches an enabled
+            #       entry in the INCOMING settings["toggles"] (the toggle
+            #       was disabled or removed out from under it).
+            new_toggles_cfg = settings.get("toggles", [])
+            if full_reset:
+                stuck_toggles = self._forceReleaseActiveToggles_locked()
+            else:
+                invalidated = [
+                    sig for sig in self._toggleActive
+                    if not self._toggleStillEnabled_locked(sig, new_toggles_cfg)
+                ]
+                stuck_toggles = {sig: True for sig in invalidated}
+                for sig in invalidated:
+                    del self._toggleActive[sig]
+                # Same "swallow the next stray physical up" rationale as
+                # _remapPendingRelease above — see its comment.
+                self._togglePendingRelease.update(stuck_toggles.keys())
+
             if full_reset:
                 self._held.clear()
                 self._rfArmed             = False
@@ -302,6 +424,10 @@ class RecoilEngine:
         for to_input in active_remaps.values():
             if to_input.get("type") in ("key", "mouse"):
                 self._sendSynthesized(to_input, True, None)
+
+        # Release any toggles force-cleared above (see stuck_toggles comment)
+        for sig in stuck_toggles:
+            self._sendSynthesized(self._toggleOwnInput(sig), True, None)
 
     @property
     def isActive(self) -> bool:
@@ -517,62 +643,83 @@ class RecoilEngine:
                     )
             return
 
-        while self._running:
-            try:
-                deviceIdx = inter.await_input(100)
-                if deviceIdx is None:
-                    continue
+        with self._interceptionLock:
+            self._interception = inter
 
-                if deviceIdx >= len(inter._devices):
-                    continue
-                device = inter._devices[deviceIdx]
-                stroke = device.receive()
-                if stroke is None:
-                    continue
+        try:
+            while self._running:
+                try:
+                    deviceIdx = inter.await_input(100)
+                    if deviceIdx is None:
+                        continue
 
-                # Track devices for use in synthesis
-                is_kb = inter.is_keyboard(deviceIdx)
-                if is_kb:
-                    self._kbDevice = device
-                elif inter.is_mouse(deviceIdx):
-                    self._msDevice = device
+                    if deviceIdx >= len(inter._devices):
+                        continue
+                    device = inter._devices[deviceIdx]
+                    stroke = device.receive()
+                    if stroke is None:
+                        continue
 
-                # Keep macro engine device refs current (only when they actually change)
-                if self._macroEngine:
-                    if (self._kbDevice is not self._lastKbDevice
-                            or self._msDevice is not self._lastMsDevice):
-                        self._lastKbDevice = self._kbDevice
-                        self._lastMsDevice = self._msDevice
-                        self._macroEngine.setDevices(self._kbDevice, self._msDevice)
+                    # Track devices for use in synthesis
+                    is_kb = inter.is_keyboard(deviceIdx)
+                    if is_kb:
+                        self._kbDevice = device
+                    elif inter.is_mouse(deviceIdx):
+                        self._msDevice = device
 
-                is_e0 = False
-                if isinstance(stroke, interception.KeyStroke):
-                    is_e0 = bool(stroke.flags & interception.KeyFlag.KEY_E0)
+                    # Keep macro engine device refs current (only when they actually change)
+                    if self._macroEngine:
+                        if (self._kbDevice is not self._lastKbDevice
+                                or self._msDevice is not self._lastMsDevice):
+                            self._lastKbDevice = self._kbDevice
+                            self._lastMsDevice = self._msDevice
+                            self._macroEngine.setDevices(self._kbDevice, self._msDevice)
 
-                suppress = False
-                if isinstance(stroke, interception.MouseStroke):
-                    suppress = self._handleMouseStroke(stroke, inter)
-                elif isinstance(stroke, interception.KeyStroke):
-                    suppress = self._handleKeyboardStroke(stroke, inter)
+                    is_e0 = False
+                    if isinstance(stroke, interception.KeyStroke):
+                        is_e0 = bool(stroke.flags & interception.KeyFlag.KEY_E0)
 
-                # Macro trigger detection — never suppresses, fires as side effect
-                if self._macroEngine:
-                    self._macroEngine.handleStroke(stroke, is_kb, is_e0)
+                    suppress = False
+                    if isinstance(stroke, interception.MouseStroke):
+                        suppress = self._handleMouseStroke(stroke, inter)
+                    elif isinstance(stroke, interception.KeyStroke):
+                        suppress = self._handleKeyboardStroke(stroke, inter)
 
-                if not suppress:
-                    device.send(stroke)
-            except Exception:
-                # Never let a single bad stroke/handler bug take the whole
-                # input thread down silently (see IndexError crash this
-                # guards against at startup, and the general "unhandled
-                # exception on background thread just kills it with no
-                # visible sign" failure mode). Log and keep listening —
-                # losing one iteration is far better than losing all input
-                # forwarding, hotkeys, remaps, and macros for the rest of
-                # the session.
-                logging.getLogger("r9tools.recoil").exception(
-                    "Unhandled error in _listenLoop iteration — continuing"
-                )
+                    # Macro trigger detection — never suppresses, fires as side effect
+                    if self._macroEngine:
+                        self._macroEngine.handleStroke(stroke, is_kb, is_e0)
+
+                    if not suppress:
+                        device.send(stroke)
+                except Exception:
+                    # Never let a single bad stroke/handler bug take the whole
+                    # input thread down silently (see IndexError crash this
+                    # guards against at startup, and the general "unhandled
+                    # exception on background thread just kills it with no
+                    # visible sign" failure mode). Log and keep listening —
+                    # losing one iteration is far better than losing all input
+                    # forwarding, hotkeys, remaps, and macros for the rest of
+                    # the session.
+                    #
+                    # This is also what makes it safe for stop() (running on
+                    # a different thread) to destroy `inter` out from under
+                    # this loop while it's blocked in await_input()/receive()/
+                    # send() above: whatever exception that produces lands
+                    # here, gets logged, and the loop immediately re-checks
+                    # `self._running` (already False by the time stop() calls
+                    # _destroyInterception()) and exits via the while
+                    # condition on the very next iteration.
+                    logging.getLogger("r9tools.recoil").exception(
+                        "Unhandled error in _listenLoop iteration — continuing"
+                    )
+        finally:
+            # Always reached on any exit from the loop above — normal stop()
+            # path, or an unrecoverable error that isn't itself caught by
+            # the per-iteration try/except (there isn't one such path today,
+            # but this guarantees the context is never abandoned even if one
+            # is introduced later). _destroyInterception() is a no-op if
+            # stop() already won the race and cleared self._interception.
+            self._destroyInterception()
 
     def _handleMouseStroke(self, stroke, inter) -> bool:
         # A button/direction whose signature currently resolves to an active
@@ -584,22 +731,45 @@ class RecoilEngine:
         # _lookupRemapTarget is read-only (no send, no state mutation), so
         # it's safe to call here purely to decide which path to take.
         for key, (downFlag, upFlag) in MOUSE_BUTTON_FLAGS.items():
+            sig = ("mouse", key)
             if stroke.button_flags & downFlag:
-                if self._lookupRemapTarget(("mouse", key)) is not None:
-                    return self._tryRemap(("mouse", key), False, inter)
+                if self._lookupRemapTarget(sig) is not None:
+                    return self._tryRemap(sig, False, inter)
+                # Toggle: checked after remap (first-branch-wins precedent
+                # — a key configured as both a remap-FROM and a toggle is
+                # not a supported combination), before today's normal
+                # _coreMouseButtonDown handling. See _tryToggleDown.
+                if self._lookupToggleTarget(sig) is not None:
+                    return self._tryToggleDown(sig, inter)
                 if self._coreMouseButtonDown(key):
                     return True
-                return self._tryRemap(("mouse", key), False, inter)
+                return self._tryRemap(sig, False, inter)
 
             elif stroke.button_flags & upFlag:
                 with self._lock:
-                    remap_relevant = (("mouse", key) in self._remapActive
-                                       or ("mouse", key) in self._remapPendingRelease)
+                    remap_relevant = (sig in self._remapActive
+                                       or sig in self._remapPendingRelease)
                 if remap_relevant:
-                    return self._tryRemap(("mouse", key), True, inter)
+                    return self._tryRemap(sig, True, inter)
+                with self._lock:
+                    toggle_pending = sig in self._togglePendingRelease
+                    if toggle_pending:
+                        self._togglePendingRelease.discard(sig)
+                if toggle_pending:
+                    return True
+                if self._lookupToggleTarget(sig) is not None:
+                    # A toggle-configured identity: the only up-events the
+                    # game should ever see are the synthesized ones sent
+                    # from _tryToggleDown's ON->OFF branch — a raw
+                    # physical up is always suppressed here, regardless of
+                    # whether this particular sig is currently ON or OFF
+                    # (this covers the very first release right after the
+                    # press that turned the toggle ON, which is the whole
+                    # point of hold-to-toggle).
+                    return True
                 if self._coreMouseButtonUp(key):
                     return True
-                return self._tryRemap(("mouse", key), True, inter)
+                return self._tryRemap(sig, True, inter)
 
         # Scroll wheel
         if stroke.button_flags & _SCROLL_WHEEL_FLAG:
@@ -757,6 +927,13 @@ class RecoilEngine:
             if self._lookupRemapTarget(sig) is not None:
                 return self._tryRemap(sig, False, inter)
 
+            # Toggle: checked after remap (first-branch-wins precedent — a
+            # key configured as both a remap-FROM and a toggle is not a
+            # supported combination), before today's normal
+            # _updateHeldKeyboard handling. See _tryToggleDown.
+            if self._lookupToggleTarget(sig) is not None:
+                return self._tryToggleDown(sig, inter)
+
             self._updateHeldKeyboard(label, False)
             return self._tryRemap(sig, False, inter)
 
@@ -766,6 +943,18 @@ class RecoilEngine:
 
         if remap_relevant:
             return self._tryRemap(sig, True, inter)
+
+        with self._lock:
+            toggle_pending = sig in self._togglePendingRelease
+            if toggle_pending:
+                self._togglePendingRelease.discard(sig)
+        if toggle_pending:
+            return True
+        if self._lookupToggleTarget(sig) is not None:
+            # See the matching comment in _handleMouseStroke's up-branch —
+            # a raw physical up for a toggle-configured identity is always
+            # suppressed, regardless of current ON/OFF state.
+            return True
 
         self._updateHeldKeyboard(label, True)
 
@@ -894,6 +1083,39 @@ class RecoilEngine:
         self._sendSynthesized(to_input, False, inter)
         return True
 
+    def _forceReleaseActiveRemaps_locked(self) -> dict:
+        """Pop and clear every currently-active remap. Must be called with
+        self._lock already held. Returns the popped {sig: to_input}
+        mapping; the caller is responsible for calling
+        _sendSynthesized(to_input, True, ...) for each returned value
+        whose type isn't "scroll" AFTER releasing the lock — mirrors
+        _tryRemap's own up-edge handling above, which skips "scroll"
+        targets since they only ever synthesize a one-shot press+release
+        on the down edge and never have anything "held" to release.
+
+        Unlike _forceReleaseActiveToggles_locked (shared by stop() AND
+        updateSettings()'s full_reset path), this is a stop()-only
+        cleanup: updateSettings() already force-releases every active
+        remap unconditionally on every call, full_reset or not (see the
+        active_remaps handling near the top of updateSettings()) — a
+        remap's active state only ever spans the instant a key is
+        physically held, unlike a toggle's ON state, which is meant to
+        persist indefinitely and needs its own separate persistence
+        rules. So a profile switch is already covered; the only gap is
+        quitting outright, which never runs updateSettings() at all.
+
+        self._remapPendingRelease is deliberately left untouched here.
+        It exists to tell a FUTURE physical up-event (arriving after
+        this sig's active entry has been cleared) to swallow itself
+        instead of being forwarded raw with no matching down. On quit
+        there is no future physical up-event to swallow — _listenLoop
+        and the Interception context are being torn down as part of
+        this same stop() call — so adding to it here would just leave
+        stale sigs sitting in a set nothing will ever consult again."""
+        stuck = dict(self._remapActive)
+        self._remapActive.clear()
+        return stuck
+
     def _lookupRemapTarget(self, sig: tuple):
         """Read-only lookup: does `sig` currently resolve to a configured,
         active remap mapping (remapper enabled, not a protected hotkey,
@@ -938,6 +1160,173 @@ class RecoilEngine:
 
     def windowMatchesFilter(self, filter_name: str) -> bool:
         return windowMatchesFilter(filter_name)
+
+    # ------------------------------------------------------------------
+    # Hold-to-toggle (settings["toggles"])
+    #
+    # Converts a key/mouse-button's native hold behavior into a toggle:
+    # press once = logically held until pressed again. State machine per
+    # sig (see _handleMouseStroke/_handleKeyboardStroke for the call
+    # sites, positioned as a branch checked AFTER remap and BEFORE today's
+    # normal _coreMouseButtonDown/Up / _updateHeldKeyboard handling — the
+    # same "first branch wins" exclusivity precedent remap already
+    # establishes in this file):
+    #
+    #   - Physical down, sig resolves to an enabled toggle, currently OFF:
+    #     let the real down through unmodified (return suppress=False),
+    #     mark ON.
+    #   - Physical down, sig resolves to an enabled toggle, currently ON:
+    #     suppress the physical down, synthesize an up for the SAME
+    #     identity (the toggle's "to" target IS its own binding, unlike
+    #     remap where from != to), mark OFF.
+    #   - Physical up, sig resolves to an enabled toggle: ALWAYS suppress
+    #     it — the only up-events the game should ever see for this
+    #     identity are the synthesized ones sent from the down-handler
+    #     above, which is what makes "toggle on" persist after the user's
+    #     finger physically lifts.
+    #
+    # A key configured as both a remap-FROM and a toggle is not a
+    # supported combination — remap is checked first at every call site,
+    # so remap silently wins if both somehow match. This mirrors the
+    # existing "first branch wins" precedent already in this file (e.g.
+    # RF slot-key vs remap-FROM) and doesn't need any new machinery.
+    # ------------------------------------------------------------------
+
+    def _lookupToggleTarget(self, sig: tuple):
+        """Read-only lookup: does `sig` currently resolve to a configured,
+        enabled toggle entry (settings["toggles"]), respecting
+        window_filter and the same Menu-Toggle/Quit protection remap's
+        _lookupRemapTarget enforces? Returns the matching toggle dict, or
+        None. No state mutation — safe to call purely to decide which
+        branch a stroke handler should take."""
+        if sig[0] not in ("key", "mouse"):
+            # Scroll (or any other sig kind) is inert for toggles — an
+            # instantaneous scroll tick has no meaningful "held" state to
+            # toggle. Toggles are never looked up from the scroll branch
+            # of _handleMouseStroke anyway; this is defense in depth
+            # against a future caller doing so by mistake, and against a
+            # malformed toggle entry with type == "scroll" ever matching
+            # (bindingSignatures'/_sanitize_profile's own filtering should
+            # already keep such entries out of settings entirely).
+            return None
+
+        with self._lock:
+            toggles       = list(self._fullSettings.get("toggles", []))
+            hotkeys       = self._fullSettings.get("hotkeys", {})
+            window_filter = self._fullSettings.get("window_filter", "")
+
+            # Protected keys may not be used as a toggle binding — mirrors
+            # _lookupRemapTarget's identical block for remap-FROM above.
+            if sig[0] == "key":
+                for hk in ("overlay_toggle", "quit"):
+                    bind = hotkeys.get(hk, {})
+                    if sig[1] == bind.get("code") and sig[2] == bind.get("e0", False):
+                        return None
+
+        if not self.windowMatchesFilter(window_filter):
+            return None
+
+        for t in toggles:
+            if not t.get("enabled", True):
+                continue
+            if t.get("type") not in ("key", "mouse"):
+                continue  # "scroll" (or malformed) entries are inert
+            if self._sigMatchesInput(sig, t):
+                return t
+        return None
+
+    def _toggleStillEnabled_locked(self, sig: tuple, toggles: list) -> bool:
+        """Structural-only check (no window_filter/protected-hotkey
+        gating, unlike _lookupToggleTarget) — does `sig` still match an
+        enabled entry in the given toggles list? Used only by
+        updateSettings() to decide whether an active toggle's binding was
+        invalidated by the incoming settings (its entry disabled or
+        removed), which is what forces a stuck-key release regardless of
+        whatever window happens to be in the foreground at that instant.
+        Must be called with self._lock held."""
+        for t in toggles:
+            if not t.get("enabled", True):
+                continue
+            if t.get("type") not in ("key", "mouse"):
+                continue
+            if self._sigMatchesInput(sig, t):
+                return True
+        return False
+
+    def _forceReleaseActiveToggles_locked(self) -> dict:
+        """Pop and clear every currently-active toggle, marking each sig
+        for stray-up swallowing via self._togglePendingRelease. Must be
+        called with self._lock already held. Returns the popped
+        {sig: True} mapping; the caller is responsible for calling
+        _sendSynthesized(self._toggleOwnInput(sig), True, ...) for each
+        returned sig AFTER releasing the lock — mirrors the existing
+        active_remaps handling in updateSettings(). Shared by stop() (app
+        quit) and updateSettings()'s full_reset path (profile switch) —
+        the two "wipe everything, unconditionally" stuck-key scenarios;
+        the third scenario (a single toggle entry disabled/removed while
+        still active, on a routine non-full-reset settings change) is
+        handled inline in updateSettings() since it only releases the
+        specific invalidated sigs, not all of them."""
+        stuck = dict(self._toggleActive)
+        self._toggleActive.clear()
+        self._togglePendingRelease.update(stuck.keys())
+        return stuck
+
+    def _toggleOwnInput(self, sig: tuple) -> dict:
+        """Build a _sendSynthesized()-shaped 'to' dict representing the
+        toggle's own physical identity — used to synthesize the release
+        when a toggle turns OFF, or is force-released (stuck-key cleanup
+        in updateSettings()/stop()). Unlike remap, a toggle's "to" target
+        IS its own "from" binding, so this is built directly from the sig
+        tuple rather than looked up from a separate mapping dict."""
+        if sig[0] == "key":
+            return {"type": "key", "code": sig[1], "e0": sig[2]}
+        return {"type": "mouse", "button": sig[1]}
+
+    def _tryToggleDown(self, sig: tuple, inter) -> bool:
+        """Down-edge state machine for a sig that resolves to an enabled
+        toggle (see _lookupToggleTarget) — see the class-level comment
+        block above for the full state machine. Returns True if the
+        physical down should be suppressed."""
+        with self._lock:
+            is_on = sig in self._toggleActive
+            if not is_on:
+                self._toggleActive[sig] = True
+            else:
+                del self._toggleActive[sig]
+
+        if not is_on:
+            # OFF -> ON: let the real physical down through unmodified
+            # (the caller forwards it via device.send() since we return
+            # False here), and separately register this identity as held
+            # for RF/recoil trigger detection (cross-system feedback).
+            # Call the *core* handler directly rather than
+            # _registerSynthesizedKeyFeedback/Mouse (which also re-feeds
+            # the macro engine) — the macro engine already saw this exact
+            # physical stroke via _listenLoop's unconditional raw-stroke
+            # feed, so re-feeding it here would double-count a single
+            # physical press as two macro trigger events.
+            #
+            # Note: a toggle key that's ALSO configured as an RF
+            # fire-trigger key is an unsupported combination (warned, not
+            # blocked, by keybind_conflicts.py) — _coreMouseButtonDown's
+            # own suppress verdict (e.g. "RF has taken over firing") is
+            # deliberately ignored here; the toggle state machine always
+            # wins over RF's own suppress decision for the DOWN edge.
+            if sig[0] == "mouse":
+                self._coreMouseButtonDown(sig[1])
+            else:
+                self._updateHeldKeyboard(scancodeLabel(sig[1], sig[2]), False)
+            return False
+
+        # ON -> OFF: suppress the physical down, synthesize a release for
+        # the SAME identity. _sendSynthesized's own feedback plumbing
+        # (_registerSynthesizedKeyFeedback/Mouse) removes it from _held
+        # and feeds the macro engine with the synthesized up-stroke — the
+        # latter mirrors exactly how remap's synthesized-TO strokes are
+        # already fed into macro trigger detection today.
+        self._sendSynthesized(self._toggleOwnInput(sig), True, inter)
+        return True
 
     def _sendSynthesized(self, to: dict, is_up: bool, inter=None):
         t = to.get("type")
