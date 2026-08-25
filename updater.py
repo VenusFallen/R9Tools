@@ -11,6 +11,7 @@ Uses only the stdlib (urllib, zipfile, json) — no extra dependencies.
 """
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -134,27 +135,62 @@ def download_app(progress_cb=None) -> Path:
 # Installer handoff
 # ---------------------------------------------------------------------------
 
+def _quote_ps_single(value: str) -> str:
+    """
+    Wrap ``value`` in single quotes for safe embedding in a PowerShell
+    -Command string, doubling any embedded single quotes (PowerShell's
+    single-quoted-string escape rule) so paths with apostrophes still
+    round-trip as one literal token.
+    """
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _build_relaunch_command(pid: int, installer_path: Path, install_args: list[str]) -> str:
+    """
+    Build the PowerShell -Command string that waits for the process ``pid``
+    to fully exit, then starts ``installer_path`` with ``install_args``.
+
+    Split out as its own pure function (no subprocess spawning) so the
+    generated command text can be unit-tested directly -- see
+    tests/test_updater_relaunch_command.py.
+    """
+    arg_list = ", ".join(_quote_ps_single(a) for a in install_args)
+    return (
+        f"Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; "
+        f"Start-Process -FilePath {_quote_ps_single(str(installer_path))} "
+        f"-ArgumentList @({arg_list}) -WindowStyle Hidden"
+    )
+
+
 def launch_installer_and_quit(installer_path: Path) -> None:
     """
-    Launch the extracted R9Tools_Setup.exe as a fully detached, independent
-    process performing a silent, unattended update-install, then return.
+    Hand off to the extracted R9Tools_Setup.exe, then return so the caller
+    can quit the app.
+
+    This does NOT launch the installer directly. It spawns a detached
+    PowerShell watcher that first runs ``Wait-Process -Id <this pid>``
+    (captured via os.getpid() before any quitting happens, with a 30s
+    safety-net timeout in case shutdown ever hangs) and only starts the
+    installer once that resolves -- i.e. once this process has actually,
+    fully terminated, not merely been asked to via QApplication.quit().
+
+    Why: a prior fix relied solely on R9Tools.iss's
+    `CloseApplications=yes` + `AppMutex=R9Tools_AppMutex` (Restart Manager
+    closing this process via the mutex main.py's _create_app_mutex() holds)
+    to make the race safe. A real failed-update Inno Setup log showed that
+    assumption was wrong: Setup's classic AppMutex check aborts within
+    milliseconds of launch if it still sees the mutex, faster than any
+    RM-mediated close-and-wait could complete, so /SUPPRESSMSGBOXES just
+    auto-picked Cancel and the whole install silently aborted before
+    ever copying files (see project history for the log). Guaranteeing
+    real process death before Setup even starts removes the race instead
+    of trying to win it. R9Tools.iss's AppMutex/CloseApplications setup is
+    kept as a defense-in-depth safety net for any other stray process
+    holding the mutex, not as the primary mechanism anymore.
 
     The caller should still quit the running app (QApplication.instance()
-    .quit() or equivalent) immediately after this returns, as a courtesy so
-    this process exits promptly and cleanly. That said, this is no longer
-    what makes replacing this process's file lock on the currently-
-    installed R9Tools.exe safe: R9Tools.iss's [Setup] now sets
-    `CloseApplications=yes` + `AppMutex=R9Tools_AppMutex`, so Setup itself
-    uses Windows' Restart Manager to find the running R9Tools process (via
-    the named mutex main.py's _create_app_mutex() holds for its whole
-    lifetime) and actually wait for/force-close it before its file-copy
-    step runs, rather than racing a fire-and-forget Popen against this
-    process's own shutdown teardown. Previously there was no such
-    synchronization at all -- a bare hope this process would exit fast
-    enough -- which is the root cause of a real observed failure where the
-    update downloaded but the exe was never replaced (Setup likely
-    deferred the locked-file copy to next reboot, or aborted the copy
-    outright) and the app kept reporting the old version.
+    .quit() or equivalent) immediately after this returns, same as before
+    -- that's what the watcher above is waiting on.
 
     Flags (Inno Setup command-line silent-install switches):
       /VERYSILENT          - no wizard UI at all; the "Installing..."
@@ -179,9 +215,11 @@ def launch_installer_and_quit(installer_path: Path) -> None:
                               retry attempts) only ever reach this file;
                               without /LOG they're discarded entirely
 
-    The subprocess is started detached from this process (new process
-    group, breakaway from any job object this process might be part of) so
-    it survives this process exiting rather than being torn down with it.
+    The PowerShell watcher is started detached from this process (new
+    process group, breakaway from any job object this process might be
+    part of) so it survives this process exiting rather than being torn
+    down with it, and the installer it eventually launches inherits that
+    same detachment via Start-Process.
     """
     if sys.platform != "win32":
         raise RuntimeError("Installer handoff is only supported on Windows")
@@ -189,6 +227,8 @@ def launch_installer_and_quit(installer_path: Path) -> None:
     installer_path = Path(installer_path)
     if not installer_path.is_file():
         raise RuntimeError(f"Installer not found at {installer_path}")
+
+    my_pid = os.getpid()
 
     creationflags = (
         subprocess.DETACHED_PROCESS
@@ -207,12 +247,21 @@ def launch_installer_and_quit(installer_path: Path) -> None:
         # block the actual update install from proceeding.
         log_path = None
 
-    args = [str(installer_path), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
+    install_args = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
     if log_path is not None:
-        args.append(f"/LOG={log_path}")
+        install_args.append(f"/LOG={log_path}")
+
+    ps_command = _build_relaunch_command(my_pid, installer_path, install_args)
 
     subprocess.Popen(
-        args,
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy", "Bypass",
+            "-WindowStyle", "Hidden",
+            "-Command", ps_command,
+        ],
         creationflags=creationflags,
         close_fds=True,
     )

@@ -1,6 +1,6 @@
 [Setup]
 AppName=R9Tools
-AppVersion=1.3.2
+AppVersion=1.4.1
 AppPublisher=VenusFallen
 AppSupportURL=https://github.com/VenusFallen/R9Tools
 DefaultDirName={autopf}\R9Tools
