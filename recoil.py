@@ -203,6 +203,25 @@ class RecoilEngine:
         self._listenThread = threading.Thread(target=self._listenLoop, daemon=True)
         self._rfThread     = threading.Thread(target=self._rfFireLoop, daemon=True)
 
+        self._retryLock = threading.Lock()       # held for the full duration of
+                                                    # retryBringUp() (including the
+                                                    # slow backoff retry loop) so a
+                                                    # second concurrent call (e.g. the
+                                                    # user mashing "Try to Reconnect")
+                                                    # bails out immediately instead of
+                                                    # racing to bring up a second
+                                                    # Interception context.
+        self._listenThreadLock = threading.Lock()  # guards the short "commit" section
+                                                    # shared by retryBringUp() (assigning
+                                                    # a freshly-started thread to
+                                                    # self._listenThread) and stop()
+                                                    # (reading self._running/
+                                                    # self._listenThread to decide what
+                                                    # to join) so the two can never
+                                                    # observe/act on a torn, half-updated
+                                                    # view of that state — see
+                                                    # retryBringUp()'s docstring.
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -241,7 +260,15 @@ class RecoilEngine:
         self._rfThread.start()
 
     def stop(self):
-        self._running = False
+        # Flip _running and snapshot whichever thread object is currently
+        # "the" listen thread atomically with retryBringUp()'s own commit
+        # section (see _listenThreadLock) — otherwise a retryBringUp() call
+        # racing this could leave stop() joining an already-dead thread
+        # object while a freshly-started replacement keeps running past
+        # stop()'s return.
+        with self._listenThreadLock:
+            self._running = False
+            listenThread = self._listenThread
         # Force-release any active toggle or remap so it doesn't get stuck
         # held down in whatever app/game has focus after we stop listening.
         # Must run before _destroyInterception(): the synthesized release
@@ -263,7 +290,7 @@ class RecoilEngine:
         # behind thread-join timeouts.
         self._destroyInterception()
         self._applyThread.join(timeout=1.0)
-        self._listenThread.join(timeout=1.0)
+        listenThread.join(timeout=1.0)
         self._rfThread.join(timeout=1.0)
 
     def _destroyInterception(self) -> None:
@@ -413,6 +440,27 @@ class RecoilEngine:
         self._rfArmed = not self._rfArmed
         self._lastRfArmToggleTime = now
 
+    def _forceRfDisarmed_locked(self) -> None:
+        """Force self._rfArmed False and immediately halt any in-progress
+        RF fire cycle. Must be called with self._lock held. Used for a
+        disabled (enabled=False) slot-key binding: unlike
+        _tryToggleRfArmed_locked, a disabled slot key doesn't toggle a
+        shared flag — it's a deterministic guarantee that RF is off while
+        this weapon is selected, so it's not gated by the arm-toggle
+        debounce (setting False repeatedly is idempotent, no flicker risk).
+
+        Only _rfFireHeld is cleared here, not _rfSuppressing: clearing
+        _rfFireHeld makes _rfFireLoop's should_fire check false on its next
+        ~10ms poll, stopping new synthesized clicks immediately. Leaving
+        _rfSuppressing True (if it was already True) preserves the eventual
+        real trigger-key release's suppress_rf capture in
+        _coreMouseButtonUp — that physical up must still be swallowed since
+        the matching physical down was swallowed when RF originally took
+        over. Clearing it early here would let that later raw up leak
+        through unsuppressed, unbalancing the down/up pair the game sees."""
+        self._rfArmed    = False
+        self._rfFireHeld = False
+
     def _rfShouldActivate_locked(self) -> bool:
         """Check RF conditions. Must be called with self._lock held."""
         rf = self._fullSettings.get("rapidfire", {})
@@ -489,9 +537,11 @@ class RecoilEngine:
     # ------------------------------------------------------------------
 
     # Bounded retry budget for bringing up the Interception driver context at
-    # startup — see _bringUpInterception() for why this is needed. ~20
-    # attempts x up to 250ms backoff caps out around 10s worst case, enough
-    # to cover driver-service-start settling without hanging indefinitely.
+    # startup — see _bringUpInterception() for why this is needed. 20
+    # attempts x up to 500ms backoff caps out around 8.75s worst case,
+    # generous enough to cover normal post-boot driver settling while still
+    # eventually giving up and reporting a genuine failure rather than
+    # retrying forever.
     _INTERCEPTION_BRINGUP_ATTEMPTS = 20
     _INTERCEPTION_BRINGUP_BASE_DELAY = 0.05  # seconds, doubles each retry up to a cap
     _INTERCEPTION_BRINGUP_MAX_DELAY = 0.5
@@ -575,7 +625,12 @@ class RecoilEngine:
         setInputFailedCallback(). Deliberately narrow: exceptions from our
         own stroke-handling logic are NOT counted here — those are software
         bugs, not evidence the driver died, and must not be misreported as
-        "restart your PC". Fires the callback exactly once per transition."""
+        "restart your PC". Fires the callback exactly once per transition.
+        Skipped entirely (counter frozen, not reset) while
+        shouldPauseFailureDetection() is True, so a focus-loss flicker
+        doesn't add spurious counts on top of a genuinely ongoing failure."""
+        if self.shouldPauseFailureDetection():
+            return
         self._consecutiveIoFailures += 1
         if (self._consecutiveIoFailures < self._INTERCEPTION_IO_FAILURE_THRESHOLD
                 or self.inputEngineFailed):
@@ -596,8 +651,91 @@ class RecoilEngine:
                     "inputFailedCallback raised"
                 )
 
-    def _listenLoop(self):
-        inter = self._bringUpInterception()
+    def retryBringUp(self) -> bool:
+        """Retry bringing up the Interception driver context after a
+        startup failure (self.inputEngineFailed == True following
+        _listenLoop() exhausting _bringUpInterception()'s retries and
+        exiting), and — if it succeeds — actually resume normal operation
+        by starting a fresh listen thread with the new context. Reuses
+        _bringUpInterception() as-is rather than duplicating its
+        retry/backoff logic.
+
+        Safe to call from any thread, including a non-Qt background
+        thread (this is the intended caller: a UI "Try to Reconnect"
+        action running off the Qt main thread). Safe against concurrent
+        calls — a second call made while one is already in flight returns
+        False immediately without starting a second bring-up attempt or a
+        second listen thread (_retryLock). Also safe against a concurrent
+        stop(): the two are serialized on the same short critical section
+        that decides whether a new thread actually gets started
+        (_listenThreadLock), so stop() can never end up joining a stale
+        thread object while a just-started replacement keeps running.
+
+        Only meaningful for the startup-failure case, where _listenLoop
+        already exited (self._listenThread is no longer alive) — this is
+        NOT a substitute for the separate mid-session I/O-failure path
+        (_onInterceptionIoFailure()), where the listen thread is still
+        alive and looping; calling this while that thread is still alive
+        is a no-op that just reports current health, since starting a
+        second thread on top of a still-running one would be actively
+        harmful (two threads fighting over the same device handles).
+
+        Returns True only once _bringUpInterception() has actually
+        returned a working context AND a new listen thread has been
+        started with it — never an inferred/optimistic result, unlike the
+        device-specific PnP-cycle reconnect path, which can't verify
+        success and deliberately makes no claim. Returns False if bring-up
+        failed again (self.inputEngineFailed stays True, no thread
+        started), if stop() won a race against this call, or if a retry
+        was already in progress.
+        """
+        if not self._retryLock.acquire(blocking=False):
+            return False
+        try:
+            if self._listenThread.is_alive():
+                # Nothing to recover: either startup already succeeded, a
+                # previous retry already won, or this is a mid-session I/O
+                # failure where the loop never exited — see docstring.
+                return not self.inputEngineFailed
+            if not self._running:
+                # start() was never called, or stop() already ran — there
+                # is no active session to resume input capture for.
+                return False
+
+            inter = self._bringUpInterception()
+            if inter is None:
+                self.inputEngineFailed = True
+                return False
+
+            with self._listenThreadLock:
+                if not self._running:
+                    # stop() won the race while we were retrying — don't
+                    # leave a freshly-opened context/thread stop() no
+                    # longer expects to manage.
+                    try:
+                        inter.destroy()
+                    except Exception:
+                        logging.getLogger("r9tools.recoil").exception(
+                            "Interception.destroy() raised discarding a "
+                            "retryBringUp() context made stale by a "
+                            "concurrent stop()"
+                        )
+                    return False
+
+                self._consecutiveIoFailures = 0
+                self.inputEngineFailed = False
+                newThread = threading.Thread(
+                    target=self._listenLoop, args=(inter,), daemon=True
+                )
+                self._listenThread = newThread
+                newThread.start()
+            return True
+        finally:
+            self._retryLock.release()
+
+    def _listenLoop(self, inter=None):
+        if inter is None:
+            inter = self._bringUpInterception()
         if inter is None:
             self.inputEngineFailed = True
             if self._inputFailedCallback:
@@ -801,12 +939,17 @@ class RecoilEngine:
                 suppress_rf      = self._rfSuppressing
                 self._rfSuppressing = False
             # Mouse slot keys: toggle RF armed state on release. Each
-            # configured slot key independently toggles the single shared
-            # _rfArmed flag (no per-key arm state).
+            # enabled slot key independently toggles the single shared
+            # _rfArmed flag (no per-key arm state). A disabled slot key
+            # instead forces RF off (and halts an in-progress fire cycle)
+            # rather than leaving the shared flag untouched — see
+            # _forceRfDisarmed_locked.
             for sk in slot_keys:
                 if sk.get("type") == "mouse" and sk.get("button") == key:
                     if sk.get("enabled", True):
                         self._tryToggleRfArmed_locked()
+                    else:
+                        self._forceRfDisarmed_locked()
                     break
             # Mouse weapon slots: select active weapon
             for i, w in enumerate(weaponSlots):
@@ -832,6 +975,8 @@ class RecoilEngine:
                 if sk.get("type") == "scroll" and sk.get("direction") == direction:
                     if sk.get("enabled", True):
                         self._tryToggleRfArmed_locked()
+                    else:
+                        self._forceRfDisarmed_locked()
                     break
             # Scroll weapon slots: select active weapon
             for i, w in enumerate(weaponSlots):
@@ -989,6 +1134,8 @@ class RecoilEngine:
                     if sk.get("code") == code and sk.get("e0", False) == e0:
                         if sk.get("enabled", True):
                             self._tryToggleRfArmed_locked()
+                        else:
+                            self._forceRfDisarmed_locked()
                         return True
 
             # Recoil weapon slot keys: select active weapon
@@ -1103,6 +1250,19 @@ class RecoilEngine:
 
     def windowMatchesFilter(self, filter_name: str) -> bool:
         return windowMatchesFilter(filter_name)
+
+    def shouldPauseFailureDetection(self) -> bool:
+        """True when a window_filter target is configured and it currently
+        doesn't have focus — both input-failure detection paths (the I/O
+        counter below, and device_watch.py's WM_DEVICECHANGE watcher) treat
+        this as a quiet period, since losing focus on an exclusive-mode/
+        fullscreen game can plausibly produce raw-input noise unrelated to
+        an actual driver failure."""
+        with self._lock:
+            window_filter = self._fullSettings.get("window_filter", "")
+        if not window_filter:
+            return False
+        return not self.windowMatchesFilter(window_filter)
 
     # ------------------------------------------------------------------
     # Hold-to-toggle (settings["toggles"]): converts a key/button's native

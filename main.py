@@ -279,11 +279,12 @@ def main():
     # panel_win starts hidden and this must be able to appear on its own,
     # see input_failed_notice.py). Kept alive via this local reference for
     # the lifetime of main() (i.e. until app.exec() returns).
-    input_failed_notice = InputFailedNotice(bridge)
+    input_failed_notice = InputFailedNotice(bridge, engine)
 
     # Combined "is input currently failed" state feeding dx_overlay's single
-    # red-badge bool: "old" (recoil.py's I/O-exception counter) is sticky
-    # for the session with no recovery, "devices" (device_watch.py's
+    # red-badge bool: "old" (recoil.py's I/O-exception counter) only clears
+    # on a verified RecoilEngine.retryBringUp() success (see
+    # _onOldPathReconnectResult()), "devices" (device_watch.py's
     # WM_DEVICECHANGE detection) can grow/shrink as devices fail/recover.
     # Both mutations only ever happen on the Qt main thread — no lock needed.
     _input_fail_state = {"old": False, "devices": []}
@@ -295,6 +296,16 @@ def main():
     def _onOldPathFailed():
         _input_fail_state["old"] = True
         _recomputeBadge()
+
+    def _onOldPathReconnectResult(success: bool):
+        # A verified success (RecoilEngine.retryBringUp() actually started
+        # a working listen thread — see recoil.py) is the only thing that
+        # clears the "old" badge state; a False result leaves it exactly as
+        # it was, since input_failed_notice.py already reverts its own
+        # button without claiming failure.
+        if success:
+            _input_fail_state["old"] = False
+            _recomputeBadge()
 
     def _onDeviceInputFailed(ids):
         _input_fail_state["devices"] = list(ids)
@@ -311,6 +322,7 @@ def main():
     # (nativeEventFilter) — still re-emitted as bridge Signals so
     # input_failed_notice.py stays decoupled from panel_window internals.
     panel_win.setDeviceFailureCallbacks(_onDeviceInputFailed, _onDeviceInputRecovered)
+    panel_win.setDeviceFocusGate(engine.shouldPauseFailureDetection)
 
     # Bridge → UI
     bridge.overlayToggled.connect(panel_win.toggleOverlay)
@@ -338,6 +350,13 @@ def main():
     # this one genuinely needs the QueuedConnection, since it originates
     # off the Qt main thread.
     bridge.reconnectAttemptFinished.connect(input_failed_notice.reconnectFinished)
+    # OLD path's own "Try to Reconnect" (input_failed_notice.py) — this one
+    # carries a genuine, verified success/failure result straight from
+    # RecoilEngine.retryBringUp() (see recoil.py), so it also drives the
+    # badge state, unlike reconnectAttemptFinished above which makes no
+    # success/failure claim.
+    bridge.bringUpRetryFinished.connect(input_failed_notice.oldPathReconnectFinished)
+    bridge.bringUpRetryFinished.connect(_onOldPathReconnectResult)
 
     # Engine → bridge (interception thread calls these directly)
     engine.setOverlayCallback(bridge.overlayToggled.emit)

@@ -25,7 +25,39 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from device_watch import DeviceFailureWatcher, _symlink_to_instance_id
+from device_watch import (
+    DeviceFailureWatcher,
+    _symlink_to_instance_id,
+    _ALL_GUIDS,
+    GUID_DEVINTERFACE_MOUSE,
+    GUID_DEVINTERFACE_KEYBOARD,
+)
+
+
+class TestRegisteredGuidsExcludeGenericHid(unittest.TestCase):
+    """Regression test for the false "input lost" prompt a wireless
+    gamepad's own idle-timeout power-off could trigger: the generic HID
+    device-interface class ("{4d1e55b2-f16f-11cf-88cb-001111000030}")
+    matches ANY HID-class device, not just keyboards/mice, so a gamepad
+    disconnect fired the exact same DBT_DEVICEREMOVECOMPLETE path as a
+    genuine keyboard/mouse disconnect.
+
+    register_device_notifications() only ever registers the GUIDs in
+    _ALL_GUIDS, and parse_device_change() has no GUID-class-specific
+    filtering of its own (it parses dbcc_name into an instance ID
+    regardless of dbcc_classguid) — so keeping the generic HID GUID out of
+    _ALL_GUIDS is sufficient on its own to guarantee a gamepad-style
+    removal is never observed at all, without needing any runtime
+    instance-ID filtering on this real-time path."""
+
+    def test_generic_hid_guid_not_registered(self):
+        self.assertNotIn("{4d1e55b2-f16f-11cf-88cb-001111000030}", _ALL_GUIDS)
+
+    def test_only_mouse_and_keyboard_guids_registered(self):
+        self.assertEqual(
+            set(_ALL_GUIDS),
+            {GUID_DEVINTERFACE_MOUSE, GUID_DEVINTERFACE_KEYBOARD},
+        )
 
 
 class TestSymlinkToInstanceId(unittest.TestCase):

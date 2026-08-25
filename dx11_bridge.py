@@ -167,6 +167,23 @@ def create_device() -> tuple[int, int]:
     return device.value, context.value
 
 
+# DXGI_ERROR_DEVICE_REMOVED / DXGI_ERROR_DEVICE_RESET — the two HRESULTs
+# GetDeviceRemovedReason() is meaningful for (diagnostic use, see dx11_overlay.py).
+DXGI_ERROR_DEVICE_REMOVED = 0x887A0005
+DXGI_ERROR_DEVICE_RESET   = 0x887A0007
+
+# ID3D11Device::GetDeviceRemovedReason — vtable slot 39 (IUnknown 0-2 +
+# ID3D11Device's own 40 methods, GetDeviceRemovedReason is the 37th of those).
+_DEV_SLOT_GET_DEVICE_REMOVED_REASON = 39
+
+
+def device_get_device_removed_reason(device: int) -> int:
+    """Diagnostic only: query why the device was removed/reset. Only
+    meaningful to call after a Present()/etc call fails with
+    DXGI_ERROR_DEVICE_REMOVED or DXGI_ERROR_DEVICE_RESET."""
+    return _com(device, _DEV_SLOT_GET_DEVICE_REMOVED_REASON, c_int, [])
+
+
 _CreateDXGIFactory2          = _dxgi.CreateDXGIFactory2
 _CreateDXGIFactory2.restype  = c_int
 _CreateDXGIFactory2.argtypes = [c_uint, POINTER(GUID), POINTER(c_void_p)]

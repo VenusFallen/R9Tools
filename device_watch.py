@@ -47,9 +47,22 @@ DEVICE_NOTIFY_WINDOW_HANDLE  = 0x00000000
 # Well-known device interface GUIDs (ntddkbd.h / ntddmou.h / hidclass.h).
 GUID_DEVINTERFACE_MOUSE    = "{378de44c-56ef-11d1-bc8c-00a0c91405dd}"
 GUID_DEVINTERFACE_KEYBOARD = "{884b96c3-56ef-11d1-bc8c-00a0c91405dd}"
-GUID_DEVINTERFACE_HID      = "{4d1e55b2-f16f-11cf-88cb-001111000030}"
 
-_ALL_GUIDS = (GUID_DEVINTERFACE_MOUSE, GUID_DEVINTERFACE_KEYBOARD, GUID_DEVINTERFACE_HID)
+# GUID_DEVINTERFACE_HID ("{4d1e55b2-f16f-11cf-88cb-001111000030}") is
+# deliberately NOT registered here. It was carried over early on as a
+# defensive hedge alongside GUID_DEVINTERFACE_MOUSE, but live testing
+# confirmed real keyboards/mice (including composite ones exposing extra
+# HID collections, e.g. a keyboard's volume wheel) always publish the
+# specific Mouse/Keyboard interfaces on their own — the generic HID
+# interface added nothing there. Worse, it's not specific to keyboards/
+# mice at all: any HID-class device matches it, including gamepads, so a
+# wireless gamepad powering off from its own idle timeout would fire the
+# exact same DBT_DEVICEREMOVECOMPLETE path as a genuine keyboard/mouse
+# disconnect and trigger a false "input lost" prompt. Registering only
+# for the specific interfaces eliminates that false-positive class at the
+# source instead of needing a runtime instance-ID filter on this
+# real-time path.
+_ALL_GUIDS = (GUID_DEVINTERFACE_MOUSE, GUID_DEVINTERFACE_KEYBOARD)
 
 _user32 = ctypes.windll.user32
 _ole32  = ctypes.windll.ole32
@@ -93,15 +106,16 @@ def _make_guid(guid_str: str) -> _GUID:
 
 
 def register_device_notifications(hwnd: int) -> list:
-    """Register for arrival/removal notifications on the mouse, keyboard,
-    and generic-HID device interface classes against the given real HWND
-    (see panel_window.py's _TopBarWindow, which reuses its own winId()).
+    """Register for arrival/removal notifications on the mouse and keyboard
+    device interface classes (see _ALL_GUIDS for why the generic HID class
+    is deliberately excluded) against the given real HWND (see
+    panel_window.py's _TopBarWindow, which reuses its own winId()).
 
     Returns the successfully-registered notification handles; not
     explicitly torn down anywhere (both this and the WM_DISPLAYCHANGE
     filter live for the app's lifetime). Registration failures are logged
     and skipped rather than raised, so one bad GUID can't take down the
-    other two."""
+    other."""
     handles = []
     for guid_str in _ALL_GUIDS:
         try:

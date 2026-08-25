@@ -7,10 +7,17 @@ stacking two popups:
 
   - OLD path: bridge.inputEngineFailed (recoil.py's I/O-exception counter).
     No device known, fires once per session; puts the window in "old" mode
-    (Dismiss-only, leads into a restart-required confirmation) and stays
-    there for the rest of the session — a broad, untargeted device restart
-    is riskier than one aimed at a known device, so "old" mode never offers
-    "Try to Reconnect".
+    (Dismiss, leading into a restart-required confirmation, plus a "Try to
+    Reconnect" of its own — see _oldPathReconnectThread()). "old" mode is
+    sticky against being overridden by a later triggerDevices() call (see
+    triggerDevices()), but is NOT permanently stuck for the session the way
+    the module used to be: old-mode's reconnect cycles every
+    currently-present keyboard/mouse device (no specific device is known,
+    unlike the device-specific path below) and then calls
+    RecoilEngine.retryBringUp(), which returns a real, verified
+    success/failure result rather than an inferred one — a True result
+    clears "old" mode and closes the notice outright, since input capture
+    is genuinely confirmed working again at that point.
 
   - NEW path: bridge.deviceInputFailed / bridge.deviceInputRecovered
     (device_watch.py's WM_DEVICECHANGE detection). Carries specific device
@@ -42,6 +49,34 @@ import theme
 _PNP_TIMEOUT_S = 20
 
 
+def _enumerate_keyboard_mouse_devices() -> list[str]:
+    """Enumerate the instance IDs of every currently-present device in the
+    Keyboard and Mouse PnP classes, for the OLD path's "Try to Reconnect"
+    (no specific failed device is known there, unlike the device-specific
+    path). Never raises — an enumeration failure just means the reconnect
+    attempt below cycles zero devices before still calling
+    RecoilEngine.retryBringUp() on its own."""
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe", "-NoProfile", "-Command",
+                "(Get-PnpDevice -Class Keyboard,Mouse -PresentOnly).InstanceId",
+            ],
+            capture_output=True, text=True, timeout=_PNP_TIMEOUT_S,
+        )
+        if result.returncode != 0:
+            logging.warning(
+                "Get-PnpDevice enumeration failed (exit %d): %s",
+                result.returncode,
+                (result.stderr or result.stdout or "<no output>").strip(),
+            )
+            return []
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    except Exception:
+        logging.exception("Get-PnpDevice enumeration raised")
+        return []
+
+
 def _attempt_pnp_reconnect(instance_id: str) -> None:
     """Disable then re-enable one specific PnP device via PowerShell.
     Never raises — failures are logged only, since the caller makes no
@@ -68,9 +103,13 @@ class InputFailedNotice(QWidget):
     """Non-modal notice window shown once input capture has failed, via
     either the old (dismiss-only) or new (reconnect-or-ignore) path."""
 
-    def __init__(self, bridge):
+    def __init__(self, bridge, engine):
         super().__init__(None, Qt.WindowType.Window)
         self._bridge = bridge
+        # Only needed for the OLD path's "Try to Reconnect"
+        # (RecoilEngine.retryBringUp()) — the device-specific path never
+        # touches the engine directly, only PowerShell.
+        self._engine = engine
 
         # None = never triggered yet. "old"/"device" — see module docstring.
         self._mode = None
@@ -127,10 +166,14 @@ class InputFailedNotice(QWidget):
         self._reconnecting = False
         self._body.setText(
             "R9Tools has lost input — hotkeys, macros, remaps, and recoil "
-            "control are no longer working. A system restart is required "
-            "to fix this."
+            "control are no longer working. \"Try to Reconnect\" will "
+            "attempt to reset your keyboard and mouse and restart input "
+            "capture, but this is not guaranteed to work. If it doesn't "
+            "help, you'll need to restart your computer to fix this."
         )
-        self._reconnectBtn.hide()
+        self._reconnectBtn.setText("Try to Reconnect")
+        self._reconnectBtn.setEnabled(True)
+        self._reconnectBtn.show()
         self._dismissBtn.setText("Dismiss")
         self._dismissBtn.setEnabled(True)
         self._show()
@@ -196,13 +239,21 @@ class InputFailedNotice(QWidget):
         )
 
     def _onReconnectClicked(self):
-        if self._reconnecting or not self._deviceIds:
+        if self._reconnecting:
             return
-        self._reconnecting = True
-        self._reconnectBtn.setEnabled(False)
-        self._reconnectBtn.setText("Reconnecting...")
-        ids = list(self._deviceIds)
-        threading.Thread(target=self._reconnectThread, args=(ids,), daemon=True).start()
+        if self._mode == "device":
+            if not self._deviceIds:
+                return
+            self._reconnecting = True
+            self._reconnectBtn.setEnabled(False)
+            self._reconnectBtn.setText("Reconnecting...")
+            ids = list(self._deviceIds)
+            threading.Thread(target=self._reconnectThread, args=(ids,), daemon=True).start()
+        elif self._mode == "old":
+            self._reconnecting = True
+            self._reconnectBtn.setEnabled(False)
+            self._reconnectBtn.setText("Reconnecting...")
+            threading.Thread(target=self._oldPathReconnectThread, daemon=True).start()
 
     def _reconnectThread(self, ids: list):
         """Runs on a background thread — never touches Qt widgets directly
@@ -212,6 +263,44 @@ class InputFailedNotice(QWidget):
         for instance_id in ids:
             _attempt_pnp_reconnect(instance_id)
         self._bridge.reconnectAttemptFinished.emit()
+
+    def _oldPathReconnectThread(self):
+        """OLD path's "Try to Reconnect" — runs on a background thread,
+        never touching Qt widgets directly (see bridge.bringUpRetryFinished,
+        auto-queued back onto the main thread). No specific device is known
+        here, so every currently-present keyboard/mouse device is cycled
+        (unlike the device-specific path's fixed ID list) before asking the
+        engine to retry bring-up. self._engine.retryBringUp() has its own
+        internal retry/backoff (worst case ~8.75s — see recoil.py), on top
+        of the PnP cycling time above, so this can run for several seconds;
+        that is expected, not a hang."""
+        for instance_id in _enumerate_keyboard_mouse_devices():
+            _attempt_pnp_reconnect(instance_id)
+        success = False
+        if self._engine is not None:
+            try:
+                success = bool(self._engine.retryBringUp())
+            except Exception:
+                logging.exception("RecoilEngine.retryBringUp() raised")
+        self._bridge.bringUpRetryFinished.emit(success)
+
+    def oldPathReconnectFinished(self, success: bool):
+        """Connected to bridge.bringUpRetryFinished — the OLD path
+        counterpart to reconnectFinished() above. Unlike that method, the
+        result here is a real, verified answer from
+        RecoilEngine.retryBringUp() (see recoil.py), not an inferred one:
+        on success the notice is fully cleared (mode reset, window hidden)
+        rather than merely reverting the button, since input capture is
+        actually confirmed working again."""
+        if self._mode != "old":
+            return
+        self._reconnecting = False
+        if success:
+            self._mode = None
+            self.hide()
+            return
+        self._reconnectBtn.setText("Try to Reconnect")
+        self._reconnectBtn.setEnabled(True)
 
     # ------------------------------------------------------------------
     # Shared show / dismiss-or-ignore

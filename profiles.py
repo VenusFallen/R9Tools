@@ -452,19 +452,20 @@ def activeSettings(data: dict) -> dict:
 
 
 def loadProfile(data: dict, name: str) -> dict | None:
-    """Set active profile and return its settings with enabled forced False.
+    """Set active profile and return its settings with input-affecting
+    features (recoil, remapper, rapidfire, macros, toggles) forced False.
     Returns None if profile not found."""
     if name not in data["profiles"]:
         return None
     data["active"] = name
     settings = copy.deepcopy(data["profiles"][name])
     settings["recoil"]["enabled"]    = False
-    settings["crosshair"]["enabled"] = False
     settings["remapper"]["enabled"]  = False
+    # crosshair/stats/indicator are purely-visual Overlay-panel toggles, not
+    # input-affecting, so unlike the features below they carry over from the
+    # profile's own saved enabled state instead of being forced off.
     settings.setdefault("stats", copy.deepcopy(_DEFAULT_SETTINGS["stats"]))
-    settings["stats"]["enabled"]     = False
     settings.setdefault("indicator", copy.deepcopy(_DEFAULT_SETTINGS["indicator"]))
-    settings["indicator"]["enabled"] = False
     # running_indicator is intentionally NOT forced off here — unlike the
     # other overlay toggles above, forcing this off on profile load would
     # defeat its purpose (confirming R9Tools loaded). It just keeps

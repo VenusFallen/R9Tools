@@ -149,5 +149,84 @@ class TestInterceptionIoFailureDetection(unittest.TestCase):
         self.assertTrue(eng.inputEngineFailed)
 
 
+class TestShouldPauseFailureDetection(unittest.TestCase):
+
+    def setUp(self):
+        self.eng = RecoilEngine(_base_settings())
+
+    def test_no_window_filter_never_pauses(self):
+        """Empty window_filter means unrestricted/global — pausing makes no
+        sense here regardless of what windowMatchesFilter would say."""
+        self.eng.windowMatchesFilter = lambda f: False
+        self.assertFalse(self.eng.shouldPauseFailureDetection())
+
+    def test_pauses_when_filter_set_and_window_unfocused(self):
+        settings = _base_settings()
+        settings["window_filter"] = "game.exe"
+        eng = RecoilEngine(settings)
+        eng.windowMatchesFilter = lambda f: False
+        self.assertTrue(eng.shouldPauseFailureDetection())
+
+    def test_does_not_pause_when_filter_set_and_window_focused(self):
+        settings = _base_settings()
+        settings["window_filter"] = "game.exe"
+        eng = RecoilEngine(settings)
+        eng.windowMatchesFilter = lambda f: True
+        self.assertFalse(eng.shouldPauseFailureDetection())
+
+
+class TestIoFailureCountingPausedByFocusGate(unittest.TestCase):
+
+    def setUp(self):
+        settings = _base_settings()
+        settings["window_filter"] = "game.exe"
+        self.eng = RecoilEngine(settings)
+        self.callback_calls = 0
+        self.eng.setInputFailedCallback(self._record_callback)
+
+    def _record_callback(self):
+        self.callback_calls += 1
+
+    def test_counter_frozen_while_paused(self):
+        """While the target window lacks focus, _onInterceptionIoFailure()
+        must not increment the counter or flip inputEngineFailed, even
+        called well past the normal threshold."""
+        threshold = self.eng._INTERCEPTION_IO_FAILURE_THRESHOLD
+        self.eng.windowMatchesFilter = lambda f: False
+
+        for _ in range(threshold + 10):
+            self.eng._onInterceptionIoFailure()
+
+        self.assertEqual(self.eng._consecutiveIoFailures, 0)
+        self.assertFalse(self.eng.inputEngineFailed)
+        self.assertEqual(self.callback_calls, 0)
+
+    def test_counter_resumes_from_prior_value_once_unpaused(self):
+        """Freezing (not resetting) means counting picks back up from
+        wherever it left off once focus returns — partial evidence of a
+        real failure survives a focus flicker."""
+        threshold = self.eng._INTERCEPTION_IO_FAILURE_THRESHOLD
+        self.eng.windowMatchesFilter = lambda f: True
+
+        for _ in range(threshold - 1):
+            self.eng._onInterceptionIoFailure()
+        self.assertEqual(self.eng._consecutiveIoFailures, threshold - 1)
+
+        # Focus lost mid-streak — further failures must not add to the count.
+        self.eng.windowMatchesFilter = lambda f: False
+        for _ in range(5):
+            self.eng._onInterceptionIoFailure()
+        self.assertEqual(self.eng._consecutiveIoFailures, threshold - 1)
+        self.assertFalse(self.eng.inputEngineFailed)
+
+        # Focus returns — the next failure continues the streak and crosses
+        # the threshold rather than starting over from 0.
+        self.eng.windowMatchesFilter = lambda f: True
+        self.eng._onInterceptionIoFailure()
+        self.assertEqual(self.eng._consecutiveIoFailures, threshold)
+        self.assertTrue(self.eng.inputEngineFailed)
+        self.assertEqual(self.callback_calls, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

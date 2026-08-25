@@ -6,6 +6,7 @@ Consolidates the former Crosshair panel and Stats panel into a single
 labels) — enabled toggle and screen position.
 """
 from PySide6.QtCore    import Qt
+from PySide6.QtGui     import QColor
 from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton
 
 import theme
@@ -16,13 +17,16 @@ from stats_poller import lhm_available
 # Crosshair constants (from the former panels/crosshair.py)
 # ---------------------------------------------------------------------------
 
-_CH_COLORS = {
-    "green":  "#00ff00",
-    "red":    "#ff0000",
-    "white":  "#ffffff",
-    "pink":   "#ff1493",
-    "yellow": "#ffff00",
-}
+_CH_COLOR_PRESETS = [
+    ("#00ff00", "Green"),
+    ("#ff0000", "Red"),
+    ("#ffffff", "White"),
+    ("#ff1493", "Pink"),
+    ("#ffff00", "Yellow"),
+]
+# Old profiles stored a named key (e.g. "green") instead of a hex string —
+# used by reload() to migrate on load.
+_CH_LEGACY_NAME_TO_HEX = {name.lower(): hexval for hexval, name in _CH_COLOR_PRESETS}
 _CH_STYLES     = ["Dot", "Cross", "Dot + Cross", "Circle", "Circle + Dot"]
 _CH_STYLE_KEYS = ["dot", "cross", "dot_cross", "circle", "circle_dot"]
 
@@ -167,17 +171,32 @@ class OverlayPanel(Panel):
         colorRow = QFrame(card1)
         cl = QHBoxLayout(colorRow)
         cl.setContentsMargins(10, 3, 10, 3)
-        cl.setSpacing(4)
+        cl.setSpacing(5)
         clbl = QLabel("Color", colorRow)
-        clbl.setFixedWidth(120)
+        clbl.setFixedWidth(80)
         cl.addWidget(clbl)
-        self._chColorCombo = QComboBox(colorRow)
-        self._chColorCombo.addItems([c.capitalize() for c in _CH_COLORS])
-        self._chColorCombo.setCurrentText(s["color"].capitalize())
-        self._chColorCombo.currentTextChanged.connect(self._onChColorChange)
-        cl.addWidget(self._chColorCombo)
+
+        self._chColorBtns: dict[str, QPushButton] = {}
+        for color, tooltip in _CH_COLOR_PRESETS:
+            btn = QPushButton(colorRow)
+            btn.setFixedSize(22, 22)
+            btn.setToolTip(tooltip)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _, c=color: self._onChColorChange(c))
+            self._chColorBtns[color] = btn
+            cl.addWidget(btn)
         cl.addStretch()
         card1.layout().addWidget(colorRow)
+
+        hueRow = QFrame(card1)
+        hl = QHBoxLayout(hueRow)
+        hl.setContentsMargins(10, 2, 10, 6)
+        self._chHueSlider = theme.HueSlider(hueRow)
+        self._chHueSlider.hueChanged.connect(self._onChHueChange)
+        hl.addWidget(self._chHueSlider)
+        card1.layout().addWidget(hueRow)
+
+        self._refreshChColorUI(s["color"])
 
         # Size parameters card
         card2 = theme.buildCard(self)
@@ -361,35 +380,31 @@ class OverlayPanel(Panel):
     def reload(self, settings: dict):
         self._settings = settings
 
-        # Crosshair
+        # Crosshair — purely visual, so unlike recoil/remapper the enabled
+        # state carries over from the profile rather than being forced off.
         s = settings["crosshair"]
         self._settings["crosshair"].update(s)
 
         self._chStyleCombo.blockSignals(True)
-        self._chColorCombo.blockSignals(True)
 
-        self._chEnabledSwitch.set(False)
-        self._settings["crosshair"]["enabled"] = False
+        self._chEnabledSwitch.set(s["enabled"])
         self._chStyleCombo.setCurrentText(self._chKeyToLabel(s["style"]))
-        self._chColorCombo.setCurrentText(s["color"].capitalize())
+        self._refreshChColorUI(s["color"])
         self._chSizeRow.set(s["size"])
         self._chThickRow.set(s["thickness"])
         self._chGapRow.set(s["gap"])
         self._chOutlineRow.set(s["outline_size"])
 
         self._chStyleCombo.blockSignals(False)
-        self._chColorCombo.blockSignals(False)
 
-        # Indicator
+        # Indicator — same carry-over rationale as crosshair above.
         ind = settings.setdefault("indicator", dict(_INDICATOR_DEFAULT))
-        self._indEnabledSwitch.set(False)
-        settings["indicator"]["enabled"] = False
+        self._indEnabledSwitch.set(ind.get("enabled", True))
         self._refreshIndPosBtns(ind.get("position", "below_crosshair"))
 
-        # Stats
+        # Stats — same carry-over rationale as crosshair above.
         st = settings.setdefault("stats", dict(_STATS_DEFAULT))
-        self._stEnabledSwitch.set(False)
-        settings["stats"]["enabled"] = False
+        self._stEnabledSwitch.set(st.get("enabled", False))
         self._refreshStCornerBtns(st.get("corner", "top_right"))
         self._stRateRow.set(st.get("update_rate_hz", 1))
         for key, sw in self._stMetricSwitches.items():
@@ -409,9 +424,36 @@ class OverlayPanel(Panel):
         self._settings["crosshair"]["style"] = self._chLabelToKey(label)
         self._onSettingsChanged(self._settings)
 
-    def _onChColorChange(self, label: str):
-        self._settings["crosshair"]["color"] = label.lower()
+    def _onChColorChange(self, color_hex: str):
+        self._settings["crosshair"]["color"] = color_hex
+        self._refreshChColorUI(color_hex)
         self._onSettingsChanged(self._settings)
+
+    def _onChHueChange(self, hue: int):
+        self._onChColorChange(QColor.fromHsv(hue, 255, 255).name())
+
+    def _refreshChColorUI(self, color_hex: str):
+        if not color_hex.startswith("#"):
+            # Old profiles stored a named key (e.g. "green") instead of hex —
+            # migrate it and write the hex back so a later save round-trips.
+            color_hex = _CH_LEGACY_NAME_TO_HEX.get(color_hex.lower(), _CH_COLOR_PRESETS[0][0])
+            self._settings["crosshair"]["color"] = color_hex
+
+        for hexval, btn in self._chColorBtns.items():
+            if hexval == color_hex:
+                btn.setStyleSheet(
+                    f"background-color: {hexval}; border: 2px solid #ffffff;"
+                    f" border-radius: 3px;")
+            else:
+                btn.setStyleSheet(
+                    f"background-color: {hexval}; border: 1px solid #444444;"
+                    f" border-radius: 3px;")
+
+        # getHsv() returns hue -1 for fully desaturated colors (e.g. white) —
+        # leave the slider where it is rather than snapping it to 0.
+        hue = QColor(color_hex).getHsv()[0]
+        if hue >= 0:
+            self._chHueSlider.setHue(hue)
 
     def _onChParamChange(self):
         s = self._settings["crosshair"]

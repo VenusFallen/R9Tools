@@ -29,6 +29,8 @@ import dx11_bridge as dx
 import dcomp_bridge as dcomp
 from dx11_renderer import Renderer
 
+_log = logging.getLogger("r9tools.dx11")
+
 # ---------------------------------------------------------------------------
 # Win32 constants
 # ---------------------------------------------------------------------------
@@ -87,7 +89,9 @@ _DefWindowProcW.restype  = _LRESULT
 _DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, _WPARAM, _LPARAM]
 
 # ---------------------------------------------------------------------------
-# Crosshair colour map
+# Crosshair colour map — legacy-format support only. New profiles store the
+# crosshair color as a hex string (see _resolve_crosshair_color); this map
+# is kept as a fallback for old profiles saved before the hue picker.
 # ---------------------------------------------------------------------------
 
 _COLOR_MAP = {
@@ -107,6 +111,13 @@ def _hex_to_col(hex_str: str) -> tuple:
         r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
         return r / 255.0, g / 255.0, b / 255.0, 1.0
     return (1.0, 1.0, 1.0, 1.0)
+
+
+def _resolve_crosshair_color(color: str) -> tuple:
+    """Accepts either a hex string (current format) or a legacy named key."""
+    if color.startswith("#"):
+        return _hex_to_col(color)
+    return _COLOR_MAP.get(color, _COLOR_MAP["green"])
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +206,11 @@ class DX11Overlay:
         self._dcomp_device = 0
         self._dcomp_target = 0
         self._dcomp_visual = 0
+
+        # Diagnostic-only (see _log_present_failure): tracks whether the
+        # current Present() failure episode has already been logged, so a
+        # sustained device-lost state doesn't spam the log at ~60Hz.
+        self._present_failure_logged = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -454,7 +470,8 @@ class DX11Overlay:
                 # Present one fully transparent frame to clear the overlay.
                 # After this the DComp visual shows (0,0,0,0) — invisible.
                 dx.ctx_clear_rtv(self._context, self._rtv, 0.0, 0.0, 0.0, 0.0)
-                dx.swap_present(self._swap_chain, 0, 0)
+                hr = dx.swap_present(self._swap_chain, 0, 0)
+                self._check_present_result(hr)
                 _had_content = False
 
             # Always tick at ~frame rate so PeekMessageW is serviced promptly —
@@ -463,6 +480,28 @@ class DX11Overlay:
             sleep   = FRAME - elapsed
             if sleep > 0.001:
                 time.sleep(sleep)
+
+    def _check_present_result(self, hr: int):
+        """Diagnostic-only: log swap_present() failures (no recovery attempted
+        here — this is purely to confirm/rule out a DXGI device-lost event
+        during a FPS-crater repro). Logged once per failure episode (reset
+        as soon as Present() succeeds again) to avoid ~60/sec spam if the
+        device stays broken for the rest of the session."""
+        if hr >= 0:
+            self._present_failure_logged = False
+            return
+        if self._present_failure_logged:
+            return
+        self._present_failure_logged = True
+        hr_u = hr & 0xFFFFFFFF
+        _log.error("[DX11Overlay] swap_present failed: HRESULT 0x%08X", hr_u)
+        if hr_u in (dx.DXGI_ERROR_DEVICE_REMOVED, dx.DXGI_ERROR_DEVICE_RESET):
+            try:
+                reason = dx.device_get_device_removed_reason(self._device)
+                _log.error("[DX11Overlay] GetDeviceRemovedReason: HRESULT 0x%08X",
+                           reason & 0xFFFFFFFF)
+            except Exception:
+                _log.exception("[DX11Overlay] GetDeviceRemovedReason call failed")
 
     def _render_frame(self):
         ctx = self._context
@@ -501,7 +540,8 @@ class DX11Overlay:
             self._si_value = None
 
         r.end()
-        dx.swap_present(self._swap_chain, 0, 0)   # no vsync → game controls timing
+        hr = dx.swap_present(self._swap_chain, 0, 0)   # no vsync → game controls timing
+        self._check_present_result(hr)
 
     # ------------------------------------------------------------------
     # Crosshair drawing
@@ -516,7 +556,7 @@ class DX11Overlay:
         gap     = cs.get("gap",          4)
         outline = cs.get("outline_size", 1)
 
-        fg  = _COLOR_MAP.get(color, _COLOR_MAP["green"])
+        fg  = _resolve_crosshair_color(color)
         bg  = _BLACK
 
         cx  = self._sw * 0.5
@@ -551,7 +591,7 @@ class DX11Overlay:
     def _draw_module_indicators(self, r: Renderer):
         cs     = self._settings.get("crosshair", {})
         color  = cs.get("color", "green")
-        fg     = _COLOR_MAP.get(color, _COLOR_MAP["green"])
+        fg     = _resolve_crosshair_color(color)
 
         labels = []
         if self._settings.get("recoil",    {}).get("enabled", False):

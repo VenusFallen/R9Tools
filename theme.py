@@ -5,7 +5,7 @@ Imported by all panel modules and by panel_window.py.
 import threading
 
 from PySide6.QtCore import Qt, QTimer, QPoint, Signal, Slot
-from PySide6.QtGui  import QPainter, QColor
+from PySide6.QtGui  import QPainter, QColor, QLinearGradient
 from PySide6.QtWidgets import (
     QWidget, QFrame, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QLineEdit, QMessageBox,
@@ -366,6 +366,69 @@ class ToggleSwitch(QWidget):
 
         p.setBrush(QColor(PANEL_BG))
         p.drawEllipse(QPoint(round(self._knobX), self.H // 2), self.R, self.R)
+        p.end()
+
+
+# ---------------------------------------------------------------------------
+# HueSlider
+# ---------------------------------------------------------------------------
+
+class HueSlider(QWidget):
+    """
+    Horizontal full-saturation hue picker. Emits hueChanged(int 0-359) on
+    click/drag. setHue() updates the marker without firing hueChanged.
+    """
+
+    hueChanged = Signal(int)
+
+    _HEIGHT = 22
+    _STOPS  = (0, 60, 120, 180, 240, 300, 359)
+
+    def __init__(self, parent=None, hue: int = 0):
+        super().__init__(parent)
+        self._hue = max(0, min(359, hue))
+        self.setFixedHeight(self._HEIGHT)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def hue(self) -> int:
+        return self._hue
+
+    def setHue(self, hue: int):
+        """Programmatic update — does NOT fire hueChanged."""
+        self._hue = max(0, min(359, hue))
+        self.update()
+
+    def _hueFromX(self, x: float) -> int:
+        w = max(1, self.width() - 1)
+        x = max(0.0, min(float(w), x))
+        return int(round(x / w * 359))
+
+    def mousePressEvent(self, event):
+        self._hue = self._hueFromX(event.position().x())
+        self.update()
+        self.hueChanged.emit(self._hue)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            self._hue = self._hueFromX(event.position().x())
+            self.update()
+            self.hueChanged.emit(self._hue)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect()
+
+        gradient = QLinearGradient(0, 0, rect.width(), 0)
+        for h in self._STOPS:
+            gradient.setColorAt(h / 359.0, QColor.fromHsv(h, 255, 255))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(gradient)
+        p.drawRoundedRect(rect, 4, 4)
+
+        x = int(self._hue / 359.0 * (rect.width() - 1))
+        p.setPen(QColor("#ffffff"))
+        p.drawLine(x, 0, x, rect.height())
         p.end()
 
 

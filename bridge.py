@@ -26,3 +26,10 @@ class UIBridge(QObject):
     deviceInputFailed        = Signal(list)  # settled batch of failed device instance IDs
     deviceInputRecovered     = Signal(list)  # remaining failed device instance IDs (empty = fully recovered)
     reconnectAttemptFinished = Signal()      # background Disable/Enable-PnpDevice attempt completed (no success/failure claim)
+
+    # OLD path (input_failed_notice.py) "Try to Reconnect" — background
+    # PnP cycle of every present keyboard/mouse device followed by
+    # RecoilEngine.retryBringUp(). Unlike reconnectAttemptFinished above,
+    # this DOES carry a genuine, verified success/failure result straight
+    # from retryBringUp() (see recoil.py), not an inferred one.
+    bringUpRetryFinished = Signal(bool)

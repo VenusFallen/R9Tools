@@ -80,9 +80,10 @@ class _DeviceChangeFilter(QAbstractNativeEventFilter):
     Mirrors _DisplayChangeFilter: hooks the existing Qt message pump
     instead of spinning up a separate message-only window/thread."""
 
-    def __init__(self, watcher: "device_watch.DeviceFailureWatcher"):
+    def __init__(self, watcher: "device_watch.DeviceFailureWatcher", should_pause=None):
         super().__init__()
         self._watcher = watcher
+        self._should_pause = should_pause or (lambda: False)
 
     def nativeEventFilter(self, eventType, message):
         if eventType in (b"windows_generic_MSG", "windows_generic_MSG"):
@@ -91,6 +92,8 @@ class _DeviceChangeFilter(QAbstractNativeEventFilter):
             except (ValueError, TypeError, OSError):
                 return False, 0
             if msg.message == device_watch.WM_DEVICECHANGE:
+                if self._should_pause():
+                    return False, 0
                 parsed = device_watch.parse_device_change(msg.wParam, msg.lParam)
                 if parsed is not None:
                     kind, instance_id = parsed
@@ -158,7 +161,8 @@ class _TopBarWindow(QWidget):
             on_recovered=lambda ids: self._onDeviceRecoveredCb(ids),
         )
         self._deviceHandles = device_watch.register_device_notifications(int(self.winId()))
-        self._deviceFilter = _DeviceChangeFilter(self._deviceWatcher)
+        self._focusGateFn = lambda: False   # rewired via setFocusGateFn(); no-op until then
+        self._deviceFilter = _DeviceChangeFilter(self._deviceWatcher, lambda: self._focusGateFn())
         QApplication.instance().installNativeEventFilter(self._deviceFilter)
 
     def setDeviceFailureCallbacks(self, on_failed, on_recovered):
@@ -166,6 +170,12 @@ class _TopBarWindow(QWidget):
         device_watch.DeviceFailureWatcher for exactly when/how each fires."""
         self._onDeviceFailedCb    = on_failed
         self._onDeviceRecoveredCb = on_recovered
+
+    def setFocusGateFn(self, fn):
+        """fn() -> bool; True means the target window_filter window currently
+        lacks focus and WM_DEVICECHANGE events should be dropped rather than
+        fed to the device-failure watcher. See RecoilEngine.shouldPauseFailureDetection()."""
+        self._focusGateFn = fn
 
     def _build(self):
         for label, index in [("CONTROLS", _TAB_RECOIL),
@@ -536,6 +546,9 @@ class PanelWindow(QWidget):
 
     def setDeviceFailureCallbacks(self, on_failed, on_recovered):
         self._topBarWin.setDeviceFailureCallbacks(on_failed, on_recovered)
+
+    def setDeviceFocusGate(self, fn):
+        self._topBarWin.setFocusGateFn(fn)
 
     # ------------------------------------------------------------------
     # Show / hide (called from bridge via toggleOverlay slot)
